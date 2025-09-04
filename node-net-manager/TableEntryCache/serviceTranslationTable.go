@@ -22,6 +22,8 @@ type TableEntry struct {
 	Nsip             net.IP      `json:"nsip"`
 	Nsipv6           net.IP      `json:"nsipv6"`
 	ServiceIP        []ServiceIP `json:"serviceIP"`
+	ClusterId        string      `json:"cluster_id"`
+	LoadMetrics      LoadMetrics `json:"load_metrics"`
 }
 
 type ServiceIpType int
@@ -30,12 +32,20 @@ const (
 	InstanceNumber ServiceIpType = iota
 	Closest        ServiceIpType = iota
 	RoundRobin     ServiceIpType = iota
+	// ClusterAware is a semantic IP which prioritizes instances within the local cluster first
+	ClusterAware ServiceIpType = iota
 )
 
 type ServiceIP struct {
 	IpType     ServiceIpType `json:"ip_type"`
 	Address    net.IP        `json:"address"`
 	Address_v6 net.IP        `json:"address_v6"`
+}
+
+type LoadMetrics struct {
+	CpuUsage          float64 `json:"cpu_usage"`
+	MemoryUsage       float64 `json:"memory_usage"`
+	ActiveConnections int     `json:"active_connections"`
 }
 
 type TableManager struct {
