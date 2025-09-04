@@ -111,3 +111,52 @@ func (cache *ProxyCache) addToConversionList(entry ConversionEntry) {
 		elem.nextEntry = (elem.nextEntry + 1) % cache.conversionListMaxSize
 	}
 }
+
+// KnownServiceIPs returns a de-duplicated list of destination Service IPs seen in the cache
+func (cache *ProxyCache) KnownServiceIPs() []net.IP {
+	cache.rwlock.RLock()
+	defer cache.rwlock.RUnlock()
+
+	seen := make(map[string]struct{})
+	result := make([]net.IP, 0)
+
+	for _, elem := range cache.cache {
+		if elem.conversionList == nil {
+			continue
+		}
+		for _, e := range elem.conversionList {
+			if e.dstServiceIp == nil || len(e.dstServiceIp) == 0 {
+				continue
+			}
+			k := e.dstServiceIp.String()
+			if _, ok := seen[k]; !ok {
+				seen[k] = struct{}{}
+				result = append(result, e.dstServiceIp)
+			}
+		}
+	}
+	return result
+}
+
+// ActiveConnectionsForInstance returns a heuristic count of active flows targeting the given namespace IP.
+// Returns -1 if the cache has no data.
+func (cache *ProxyCache) ActiveConnectionsForInstance(nsip net.IP) int {
+	cache.rwlock.RLock()
+	defer cache.rwlock.RUnlock()
+
+	if cache.cache == nil || len(cache.cache) == 0 {
+		return -1
+	}
+	count := 0
+	for _, elem := range cache.cache {
+		if elem.conversionList == nil {
+			continue
+		}
+		for _, e := range elem.conversionList {
+			if e.dstip != nil && e.dstip.Equal(nsip) {
+				count++
+			}
+		}
+	}
+	return count
+}

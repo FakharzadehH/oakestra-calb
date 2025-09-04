@@ -15,6 +15,11 @@ import (
 type FakeEnv struct {
 }
 
+// RefreshServiceTable implements env.EnvironmentManager.
+func (fakeenv *FakeEnv) RefreshServiceTable(jobname string) {
+	panic("unimplemented")
+}
+
 // used as example packets for testing
 var ipv6Packet string = "600219310028063ffc000000000000000000000000000203fdff1000000000000000000000000001b98400502a8697ed00000000a002ff322a8900000204056e0402080a7fb1168c0000000001030307"
 var ipv4Packet string = "4500003471ab40003f06b54e0a1e00130a120088a8fc0050866d4e41ec673059801001f6a3fd00000101080aac259946269fb537"

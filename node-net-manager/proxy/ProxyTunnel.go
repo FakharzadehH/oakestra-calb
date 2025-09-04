@@ -6,12 +6,14 @@ import (
 	"NetManager/logger"
 	"NetManager/proxy/iputils"
 	"fmt"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
-	"github.com/songgao/water"
 	"math/rand"
 	"net"
 	"sync"
+	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/songgao/water"
 )
 
 // const
@@ -54,6 +56,10 @@ type GoProxyTunnel struct {
 	udpwrite            sync.RWMutex
 	tunwrite            sync.RWMutex
 	isListening         bool
+	localClusterId      string
+	clusterAwareEnabled bool
+	loadThreshold       float64
+	updateInterval      time.Duration
 }
 
 // incoming message from UDP channel
@@ -143,6 +149,60 @@ func (proxy *GoProxyTunnel) ingoingMessage() {
 // If packet destination is in the range of proxy.ProxyIpSubnetwork
 // then find enable load balancing policy and find out the actual dstIP address
 func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot iputils.TransportLayerProtocol) gopacket.Packet {
+	// Optional: apply cluster-aware only when enabled
+	if proxy.clusterAwareEnabled {
+		// Check if destination is a ServiceIP and of type ClusterAware
+		entries := proxy.environment.GetTableEntryByServiceIP(ip.GetDestIP())
+		if len(entries) > 0 {
+			isClusterAware := false
+			for _, e := range entries {
+				for _, sip := range e.ServiceIP {
+					if (sip.Address.Equal(ip.GetDestIP()) || sip.Address_v6.Equal(ip.GetDestIP())) && sip.IpType == TableEntryCache.ClusterAware {
+						isClusterAware = true
+						break
+					}
+				}
+			}
+			if isClusterAware {
+				sourceClusterId := proxy.getSourceClusterId(ip.GetSrcIP())
+				preferIPv6 := ip.GetProtocolVersion() == 6
+				clusterAwareDest, err := proxy.getClusterAwareDestination(ip.GetDestIP(), sourceClusterId, preferIPv6)
+				if err == nil {
+					return proxy.createClusterAwarePacket(ip, prot, clusterAwareDest)
+				} else {
+					logger.DebugLogger().Printf("Cluster-aware selection fallback: %v", err)
+				}
+			}
+		}
+	}
+
+	// Fall back to existing logic for non-service calls
+	return proxy.outgoingProxyOriginal(ip, prot)
+}
+
+func (proxy *GoProxyTunnel) getSourceClusterId(srcIP net.IP) string {
+	// Look up the source IP in the table to find which cluster it belongs to
+	entry, exists := proxy.environment.GetTableEntryByNsIP(srcIP)
+	if exists {
+		return entry.ClusterId
+	}
+
+	// If not found, try to get from instance IP
+	entry, exists = proxy.environment.GetTableEntryByInstanceIP(srcIP)
+	if exists {
+		return entry.ClusterId
+	}
+
+	// Default to local cluster if not found
+	return proxy.localClusterId
+}
+
+func (proxy *GoProxyTunnel) createClusterAwarePacket(ip iputils.NetworkLayerPacket, prot iputils.TransportLayerProtocol, destIP net.IP) gopacket.Packet {
+	// Create a new packet with the cluster-aware destination
+	return ip.SerializePacket(destIP, ip.GetSrcIP(), prot)
+}
+
+func (proxy *GoProxyTunnel) outgoingProxyOriginal(ip iputils.NetworkLayerPacket, prot iputils.TransportLayerProtocol) gopacket.Packet {
 	dstIP := ip.GetDestIP()
 	srcIP := ip.GetSrcIP()
 	var semanticRoutingSubnetwork bool
@@ -515,4 +575,188 @@ func decodePacket(msg []byte) (iputils.NetworkLayerPacket, iputils.TransportLaye
 	}
 
 	return res, res.GetTransportLayer()
+}
+
+// Add this method to GoProxyTunnel struct
+func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceClusterId string, preferIPv6 bool) (net.IP, error) {
+	// Get all instances of the target service
+	serviceEntries := proxy.environment.GetTableEntryByServiceIP(serviceIP)
+	if len(serviceEntries) == 0 {
+		return net.IP{}, fmt.Errorf("no service instances found for IP: %s", serviceIP.String())
+	}
+
+	// If cluster information is missing across the board, bail out to preserve existing behavior
+	knownClusterInfo := false
+	for _, e := range serviceEntries {
+		if e.ClusterId != "" {
+			knownClusterInfo = true
+			break
+		}
+	}
+	if !knownClusterInfo {
+		return net.IP{}, fmt.Errorf("no cluster id information available in table entries")
+	}
+
+	// Separate instances by cluster
+	localInstances := make([]TableEntryCache.TableEntry, 0)
+	remoteInstances := make([]TableEntryCache.TableEntry, 0)
+
+	for _, entry := range serviceEntries {
+		if entry.ClusterId == sourceClusterId {
+			localInstances = append(localInstances, entry)
+		} else {
+			remoteInstances = append(remoteInstances, entry)
+		}
+	}
+
+	// First, try to find a suitable local instance
+	if len(localInstances) > 0 {
+		localInstance := proxy.selectBestLocalInstance(localInstances)
+		if localInstance != nil {
+			if preferIPv6 {
+				return localInstance.Nsipv6, nil
+			}
+			return localInstance.Nsip, nil
+		}
+	}
+
+	// If no suitable local instance, fall back to remote instances
+	if len(remoteInstances) > 0 {
+		remoteInstance := proxy.selectBestRemoteInstance(remoteInstances)
+		if remoteInstance != nil {
+			if preferIPv6 {
+				return remoteInstance.Nsipv6, nil
+			}
+			return remoteInstance.Nsip, nil
+		}
+	}
+
+	return net.IP{}, fmt.Errorf("no suitable service instances found")
+}
+
+func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.TableEntry) *TableEntryCache.TableEntry {
+	var bestInstance *TableEntryCache.TableEntry
+	bestScore := float64(0)
+
+	for i := range instances {
+		instance := &instances[i]
+
+		// If threshold configured, skip local instances that are considered overloaded
+		if proxy.loadThreshold > 0 {
+			// simple aggregate load: average of cpu and memory usage in [0,1]
+			effectiveLoad := 0.0
+			if instance.LoadMetrics.CpuUsage > 0 || instance.LoadMetrics.MemoryUsage > 0 {
+				effectiveLoad = (instance.LoadMetrics.CpuUsage + instance.LoadMetrics.MemoryUsage) / 2.0
+			}
+			if effectiveLoad > proxy.loadThreshold {
+				continue
+			}
+		}
+
+		score := proxy.calculateInstanceScore(instance)
+
+		// Prefer instances with higher score (lower load -> higher score)
+		if bestInstance == nil || score > bestScore {
+			bestInstance = instance
+			bestScore = score
+		}
+	}
+
+	return bestInstance
+}
+
+func (proxy *GoProxyTunnel) selectBestRemoteInstance(instances []TableEntryCache.TableEntry) *TableEntryCache.TableEntry {
+	// For remote instances, we might want to consider network latency as well
+	// For now, use the same logic as local instances
+	return proxy.selectBestLocalInstance(instances)
+}
+
+func (proxy *GoProxyTunnel) calculateInstanceScore(instance *TableEntryCache.TableEntry) float64 {
+	// Calculate a score based on load metrics
+	// Lower load = higher score
+	cpuScore := 1.0 - instance.LoadMetrics.CpuUsage
+	memoryScore := 1.0 - instance.LoadMetrics.MemoryUsage
+	connectionScore := 1.0 - (float64(instance.LoadMetrics.ActiveConnections) / 100.0) // Normalize to 0-1
+
+	// Weighted average
+	return (cpuScore*0.4 + memoryScore*0.4 + connectionScore*0.2)
+}
+
+// Expose configuration setters used by server from netcfg.json
+func (proxy *GoProxyTunnel) SetClusterAwareRouting(enabled bool) {
+	proxy.clusterAwareEnabled = enabled
+}
+
+func (proxy *GoProxyTunnel) SetLocalClusterId(id string) {
+	proxy.localClusterId = id
+}
+
+func (proxy *GoProxyTunnel) SetLoadThreshold(threshold float64) {
+	proxy.loadThreshold = threshold
+}
+
+func (proxy *GoProxyTunnel) StartLoadMonitoring(intervalSeconds int) {
+	if intervalSeconds <= 0 {
+		intervalSeconds = 300
+	}
+	proxy.updateInterval = time.Duration(intervalSeconds) * time.Second
+	proxy.startLoadMonitoring()
+}
+
+// Add periodic load monitoring
+func (proxy *GoProxyTunnel) startLoadMonitoring() {
+	go func() {
+		interval := proxy.updateInterval
+		if interval == 0 {
+			interval = 300 * time.Second
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				proxy.updateLoadMetrics()
+			case <-proxy.stopChannel:
+				return
+			}
+		}
+	}()
+}
+
+func (proxy *GoProxyTunnel) updateLoadMetrics() {
+	// Get entries by service IP for each known service
+	for _, serviceIP := range proxy.getKnownServiceIPs() {
+		entries := proxy.environment.GetTableEntryByServiceIP(serviceIP)
+		for i := range entries {
+			entry := &entries[i]
+			// fetch updated metrics using full entry context (nsip, node ip, cluster id)
+			loadMetrics := proxy.getInstanceLoadMetrics(entry.Nsip)
+			entry.LoadMetrics = loadMetrics
+		}
+	}
+}
+
+// getInstanceLoadMetrics retrieves metrics via MQTT table query and reads metrics from updated TableEntry in memory.
+func (proxy *GoProxyTunnel) getInstanceLoadMetrics(instanceIP net.IP) TableEntryCache.LoadMetrics {
+	// Locate current entry to get job context
+	entry, ok := proxy.environment.GetTableEntryByNsIP(instanceIP)
+	if !ok {
+		return TableEntryCache.LoadMetrics{}
+	}
+
+	// Force refresh from Cluster Service Manager (Mongo-backed)
+	proxy.environment.RefreshServiceTable(entry.JobName)
+
+	// Read back updated entry and return latest metrics
+	if updated, ok2 := proxy.environment.GetTableEntryByNsIP(instanceIP); ok2 {
+		return updated.LoadMetrics
+	}
+	// Fallback to previously known metrics
+	return entry.LoadMetrics
+}
+
+func (proxy *GoProxyTunnel) getKnownServiceIPs() []net.IP {
+	// Use proxy cache to return a list of known destination Service IPs
+	return proxy.proxycache.KnownServiceIPs()
 }

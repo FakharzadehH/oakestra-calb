@@ -79,15 +79,19 @@ func NewCustom(configuration Configuration) GoProxyTunnel {
 		Mask: net.CIDRMask(tunconfig.ProxySubnetworkIPv6Prefix, 128),
 	}
 	proxy.tunNetIPv6 = tunconfig.TunNetIPv6
-	// create the TUN device
-	proxy.createTun()
-
-	// set local ip
-	ipstring, _ := network.GetLocalIPandIface()
-	proxy.localIP = net.ParseIP(ipstring)
-
-	logger.InfoLogger().Printf("Created ProxyTun device: %s\n", proxy.ifce.Name())
-	logger.InfoLogger().Printf("Local Ip detected: %s\n", proxy.localIP.String())
+	// create the TUN device (skippable for unit tests / unprivileged runs)
+	if os.Getenv("SKIP_TUN_SETUP") != "1" {
+		proxy.createTun()
+		// set local ip
+		ipstring, _ := network.GetLocalIPandIface()
+		proxy.localIP = net.ParseIP(ipstring)
+		logger.InfoLogger().Printf("Created ProxyTun device: %s\n", proxy.ifce.Name())
+		logger.InfoLogger().Printf("Local Ip detected: %s\n", proxy.localIP.String())
+	} else {
+		logger.InfoLogger().Println("SKIP_TUN_SETUP=1: skipping TUN device creation")
+		ipstring, _ := network.GetLocalIPandIface()
+		proxy.localIP = net.ParseIP(ipstring)
+	}
 
 	return proxy
 }
