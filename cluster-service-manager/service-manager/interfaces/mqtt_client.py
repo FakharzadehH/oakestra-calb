@@ -135,6 +135,7 @@ def _load_metrics_handler(client_id, payload):
                 "cpu_usage": m.get("cpu_usage", 0),
                 "memory_usage": m.get("memory_usage", 0),
                 "active_connections": m.get("active_connections", -1),
+                "timestamp": m.get("timestamp"),
             }
             mongo_update_instance_load_metrics(job_name, instance_number, load_metrics)
         except Exception as e:

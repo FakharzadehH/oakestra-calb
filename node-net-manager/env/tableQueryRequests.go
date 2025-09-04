@@ -77,6 +77,7 @@ func responseParser(responseStruct mqttifce.TableQueryResponse) ([]TableEntryCac
 			CpuUsage:          instance.LoadMetrics.CpuUsage,
 			MemoryUsage:       instance.LoadMetrics.MemoryUsage,
 			ActiveConnections: instance.LoadMetrics.ActiveConnections,
+			Timestamp:         instance.LoadMetrics.Timestamp,
 		}
 
 		result = append(result, entry)

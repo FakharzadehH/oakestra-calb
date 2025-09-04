@@ -244,7 +244,7 @@ def mongo_update_instance_load_metrics(job_name, instance_number, load_metrics):
         },
         {
             '$set': {
-                "instance_list.$.load_metrics": load_metrics
+                "instance_list.$.load_metrics": load_metrics  # expected keys: cpu_usage, memory_usage, active_connections, timestamp
             }
         }
     )

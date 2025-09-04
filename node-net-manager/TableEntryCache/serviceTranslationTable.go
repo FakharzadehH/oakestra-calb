@@ -46,6 +46,7 @@ type LoadMetrics struct {
 	CpuUsage          float64 `json:"cpu_usage"`
 	MemoryUsage       float64 `json:"memory_usage"`
 	ActiveConnections int     `json:"active_connections"`
+	Timestamp         int64   `json:"timestamp"` // unix millis when metrics sampled
 }
 
 type TableManager struct {

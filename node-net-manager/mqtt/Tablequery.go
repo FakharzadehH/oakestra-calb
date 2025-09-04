@@ -52,6 +52,7 @@ type ServiceInstance struct {
 		CpuUsage          float64 `json:"cpu_usage,omitempty"`
 		MemoryUsage       float64 `json:"memory_usage,omitempty"`
 		ActiveConnections int     `json:"active_connections,omitempty"`
+		Timestamp         int64   `json:"timestamp,omitempty"`
 	} `json:"load_metrics,omitempty"`
 }
 

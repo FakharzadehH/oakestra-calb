@@ -62,8 +62,8 @@ class TestLoadMetricsHandler(unittest.TestCase):
         actions.clear()
         mqtt_client.mongo_update_instance_load_metrics = fake_mongo_update
         payload = {"load_metrics": [
-            {"job_name": "svc.a", "instance_number": 0, "cpu_usage": 0.1, "memory_usage": 0.2, "active_connections": 5},
-            {"job_name": "svc.b", "instance_number": 1, "cpu_usage": 0.3, "memory_usage": 0.4, "active_connections": -1},
+            {"job_name": "svc.a", "instance_number": 0, "cpu_usage": 0.1, "memory_usage": 0.2, "active_connections": 5, "timestamp": 111},
+            {"job_name": "svc.b", "instance_number": 1, "cpu_usage": 0.3, "memory_usage": 0.4, "active_connections": -1, "timestamp": 112},
         ]}
         mqtt_client._load_metrics_handler("node1", payload)
         self.assertEqual(len(actions), 2)
