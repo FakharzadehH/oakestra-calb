@@ -79,6 +79,12 @@ func NewCustom(configuration Configuration) GoProxyTunnel {
 		Mask: net.CIDRMask(tunconfig.ProxySubnetworkIPv6Prefix, 128),
 	}
 	proxy.tunNetIPv6 = tunconfig.TunNetIPv6
+	// For tests we can fully bypass tun setup and local interface discovery by setting TEST_LIGHTWEIGHT_PROXY=1
+	if os.Getenv("TEST_LIGHTWEIGHT_PROXY") == "1" {
+		proxy.localIP = net.ParseIP("127.0.0.1")
+		return proxy
+	}
+
 	// create the TUN device (skippable for unit tests / unprivileged runs)
 	if os.Getenv("SKIP_TUN_SETUP") != "1" {
 		proxy.createTun()

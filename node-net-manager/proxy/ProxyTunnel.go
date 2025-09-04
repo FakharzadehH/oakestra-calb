@@ -619,6 +619,14 @@ func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.
 	for i := range instances {
 		instance := &instances[i]
 
+		// Skip stale metrics entirely if TTL configured
+		if proxy.metricsTTL > 0 && instance.LoadMetrics.Timestamp > 0 {
+			age := time.Since(time.UnixMilli(instance.LoadMetrics.Timestamp))
+			if age > proxy.metricsTTL {
+				continue
+			}
+		}
+
 		// If threshold configured, skip local instances that are considered overloaded
 		if proxy.loadThreshold > 0 {
 			// simple aggregate load: average of cpu and memory usage in [0,1]
@@ -654,7 +662,8 @@ func (proxy *GoProxyTunnel) calculateInstanceScore(instance *TableEntryCache.Tab
 	if proxy.metricsTTL > 0 && instance.LoadMetrics.Timestamp > 0 {
 		age := time.Since(time.UnixMilli(instance.LoadMetrics.Timestamp))
 		if age > proxy.metricsTTL {
-			return 0.0001 // effectively deprioritize
+			// use negative score so any fresh instance with non-negative wins deterministically
+			return -1.0
 		}
 	}
 
