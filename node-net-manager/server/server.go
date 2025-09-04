@@ -38,6 +38,10 @@ type ClusterAwareRouting struct {
 	LoadThreshold  float64 `json:"load_threshold"`
 	UpdateInterval int     `json:"update_interval"`
 	LocalClusterId string  `json:"local_cluster_id"`
+	CpuWeight      float64 `json:"cpu_weight"`
+	MemoryWeight   float64 `json:"memory_weight"`
+	ConnWeight     float64 `json:"conn_weight"`
+	MetricsTTL     int     `json:"metrics_ttl_seconds"` // seconds staleness window
 }
 
 type netConfiguration struct {
@@ -144,6 +148,8 @@ func register(writer http.ResponseWriter, request *http.Request) {
 	Proxy.SetClusterAwareRouting(Configuration.ClusterAwareRouting.Enabled)
 	Proxy.SetLocalClusterId(Configuration.ClusterAwareRouting.LocalClusterId)
 	Proxy.SetLoadThreshold(Configuration.ClusterAwareRouting.LoadThreshold)
+	Proxy.SetWeights(Configuration.ClusterAwareRouting.CpuWeight, Configuration.ClusterAwareRouting.MemoryWeight, Configuration.ClusterAwareRouting.ConnWeight)
+	Proxy.SetMetricsTTL(Configuration.ClusterAwareRouting.MetricsTTL)
 	Proxy.StartLoadMonitoring(Configuration.ClusterAwareRouting.UpdateInterval)
 
 	Proxy.Listen()

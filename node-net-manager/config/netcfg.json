@@ -10,6 +10,10 @@
     "enabled": true,
     "load_threshold": 0.8,
     "update_interval": 30,
-    "local_cluster_id": "cluster_1"
+    "local_cluster_id": "cluster_1",
+    "cpu_weight": 0.4,
+    "memory_weight": 0.4,
+    "conn_weight": 0.2,
+    "metrics_ttl_seconds": 90
   }
 }

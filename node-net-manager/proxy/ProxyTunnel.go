@@ -60,6 +60,10 @@ type GoProxyTunnel struct {
 	clusterAwareEnabled bool
 	loadThreshold       float64
 	updateInterval      time.Duration
+	cpuWeight           float64
+	memoryWeight        float64
+	connWeight          float64
+	metricsTTL          time.Duration
 }
 
 // incoming message from UDP channel
@@ -75,73 +79,47 @@ type outgoingMessage struct {
 
 // handler function for all outgoing messages that are received by the TUN device
 func (proxy *GoProxyTunnel) outgoingMessage() {
-	for {
-		select {
-		case msg := <-proxy.outgoingChannel:
-			// logger.DebugLogger().Println("outgoingChannelSize: ", len(proxy.outgoingChannel))
-			// logger.DebugLogger().Printf("Msg outgoingChannel: %x\n", (*msg.content))
-			ip, prot := decodePacket(*msg.content)
-			if ip == nil {
-				continue
-			}
-			logger.DebugLogger().Printf("Outgoing packet:\t\t\t%s ---> %s\n", ip.GetSrcIP().String(), ip.GetDestIP().String())
-
-			// continue only if the packet is udp or tcp, otherwise just drop it
-			if prot == nil {
-				logger.DebugLogger().Println("Neither TCP, nor UDP packet received. Dropping it.")
-				continue
-			}
-			// proxyConversion
-			newPacket := proxy.outgoingProxy(ip, prot)
-			if newPacket == nil {
-				// if no proxy conversion available, drop it
-				logger.ErrorLogger().Println("Unable to convert the packet")
-				continue
-			}
-
-			// fetch remote address
-			dstHost, dstPort := proxy.locateRemoteAddress(ip.GetDestIP())
-
-			// packetForwarding to tunnel interface
-			proxy.forward(dstHost, dstPort, newPacket, 0)
+	for msg := range proxy.outgoingChannel {
+		ip, prot := decodePacket(*msg.content)
+		if ip == nil {
+			continue
 		}
+		logger.DebugLogger().Printf("Outgoing packet:\t\t\t%s ---> %s\n", ip.GetSrcIP().String(), ip.GetDestIP().String())
+
+		if prot == nil { // only TCP/UDP supported
+			logger.DebugLogger().Println("Neither TCP, nor UDP packet received. Dropping it.")
+			continue
+		}
+		newPacket := proxy.outgoingProxy(ip, prot)
+		if newPacket == nil {
+			logger.ErrorLogger().Println("Unable to convert the packet")
+			continue
+		}
+		dstHost, dstPort := proxy.locateRemoteAddress(ip.GetDestIP())
+		proxy.forward(dstHost, dstPort, newPacket, 0)
 	}
 }
 
 // handler function for all ingoing messages that are received by the UDP socket
 func (proxy *GoProxyTunnel) ingoingMessage() {
-	for {
-		select {
-		case msg := <-proxy.incomingChannel:
-			// logger.DebugLogger().Println("ingoingChannelSize: ", len(proxy.incomingChannel))
-			// logger.DebugLogger().Printf("Msg incomingChannel: %x\n", (*msg.content))
-			ip, prot := decodePacket(*msg.content)
-
-			// proceed only if this is a valid ip packet
-			if ip == nil {
-				continue
-			}
-			logger.DebugLogger().Printf("Ingoing packet:\t\t\t %s <--- %s\n", ip.GetDestIP().String(), ip.GetSrcIP().String())
-
-			// continue only if the packet is udp or tcp, otherwise just drop it
-			if prot == nil {
-				continue
-			}
-
-			// proxyConversion
-			newPacket := proxy.ingoingProxy(ip, prot)
-			var packetBytes []byte
-			if newPacket == nil {
-				// no conversion data, forward as is
-				packetBytes = *msg.content
-			} else {
-				packetBytes = packetToByte(newPacket)
-			}
-			// output to bridge interface
-			_, err := proxy.ifce.Write(packetBytes)
-			if err != nil {
-				logger.ErrorLogger().Println(err)
-			}
+	for msg := range proxy.incomingChannel {
+		ip, prot := decodePacket(*msg.content)
+		if ip == nil {
+			continue
+		}
+		logger.DebugLogger().Printf("Ingoing packet:\t\t\t %s <--- %s\n", ip.GetDestIP().String(), ip.GetSrcIP().String())
+		if prot == nil { // only TCP/UDP handled
+			continue
+		}
+		newPacket := proxy.ingoingProxy(ip, prot)
+		var packetBytes []byte
+		if newPacket == nil {
+			packetBytes = *msg.content
+		} else {
+			packetBytes = packetToByte(newPacket)
+		}
+		if _, err := proxy.ifce.Write(packetBytes); err != nil {
+			logger.ErrorLogger().Println(err)
 		}
 	}
 }
@@ -149,7 +127,7 @@ func (proxy *GoProxyTunnel) ingoingMessage() {
 // If packet destination is in the range of proxy.ProxyIpSubnetwork
 // then find enable load balancing policy and find out the actual dstIP address
 func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot iputils.TransportLayerProtocol) gopacket.Packet {
-	// Optional: apply cluster-aware only when enabled
+	// apply cluster-aware only when enabled
 	if proxy.clusterAwareEnabled {
 		// Check if destination is a ServiceIP and of type ClusterAware
 		entries := proxy.environment.GetTableEntryByServiceIP(ip.GetDestIP())
@@ -577,7 +555,7 @@ func decodePacket(msg []byte) (iputils.NetworkLayerPacket, iputils.TransportLaye
 	return res, res.GetTransportLayer()
 }
 
-// Add this method to GoProxyTunnel struct
+// Given a service IP and the source cluster ID, select the best destination instance
 func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceClusterId string, preferIPv6 bool) (net.IP, error) {
 	// Get all instances of the target service
 	serviceEntries := proxy.environment.GetTableEntryByServiceIP(serviceIP)
@@ -667,19 +645,51 @@ func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.
 
 func (proxy *GoProxyTunnel) selectBestRemoteInstance(instances []TableEntryCache.TableEntry) *TableEntryCache.TableEntry {
 	// For remote instances, we might want to consider network latency as well
-	// For now, use the same logic as local instances
+	// For now, we use the same logic as local instances
 	return proxy.selectBestLocalInstance(instances)
 }
 
 func (proxy *GoProxyTunnel) calculateInstanceScore(instance *TableEntryCache.TableEntry) float64 {
-	// Calculate a score based on load metrics
-	// Lower load = higher score
-	cpuScore := 1.0 - instance.LoadMetrics.CpuUsage
-	memoryScore := 1.0 - instance.LoadMetrics.MemoryUsage
-	connectionScore := 1.0 - (float64(instance.LoadMetrics.ActiveConnections) / 100.0) // Normalize to 0-1
+	// If metrics are stale, penalize heavily (or treat as unknown load -> lower priority). Stale if timestamp older than TTL.
+	if proxy.metricsTTL > 0 && instance.LoadMetrics.Timestamp > 0 {
+		age := time.Since(time.UnixMilli(instance.LoadMetrics.Timestamp))
+		if age > proxy.metricsTTL {
+			return 0.0001 // effectively deprioritize
+		}
+	}
 
-	// Weighted average
-	return (cpuScore*0.4 + memoryScore*0.4 + connectionScore*0.2)
+	// Base inversion to convert usage to free capacity
+	cpuScore := 1.0 - clamp01(instance.LoadMetrics.CpuUsage)
+	memoryScore := 1.0 - clamp01(instance.LoadMetrics.MemoryUsage)
+	// Simple normalization of connections: assume 0..200 baseline
+	connNorm := float64(instance.LoadMetrics.ActiveConnections) / 200.0
+	if connNorm > 1 {
+		connNorm = 1
+	}
+	connectionScore := 1.0 - connNorm
+
+	// Weighted average (configurable)
+	wCPU := proxy.cpuWeight
+	wMEM := proxy.memoryWeight
+	wCONN := proxy.connWeight
+	total := wCPU + wMEM + wCONN
+	if total <= 0 { // fallback defaults
+		wCPU, wMEM, wCONN = 0.4, 0.4, 0.2
+		total = 1.0
+	}
+	score := (cpuScore*wCPU + memoryScore*wMEM + connectionScore*wCONN) / total
+	return score
+}
+
+// clamp01 ensures a value is within [0,1]
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // Expose configuration setters used by server from netcfg.json
@@ -693,6 +703,18 @@ func (proxy *GoProxyTunnel) SetLocalClusterId(id string) {
 
 func (proxy *GoProxyTunnel) SetLoadThreshold(threshold float64) {
 	proxy.loadThreshold = threshold
+}
+
+// New setters for weighting and advanced behavior
+func (proxy *GoProxyTunnel) SetWeights(cpu, mem, conn float64) {
+	proxy.cpuWeight, proxy.memoryWeight, proxy.connWeight = cpu, mem, conn
+}
+func (proxy *GoProxyTunnel) SetMetricsTTL(seconds int) {
+	if seconds <= 0 {
+		proxy.metricsTTL = 0
+		return
+	}
+	proxy.metricsTTL = time.Duration(seconds) * time.Second
 }
 
 func (proxy *GoProxyTunnel) StartLoadMonitoring(intervalSeconds int) {
@@ -732,10 +754,13 @@ func (proxy *GoProxyTunnel) updateLoadMetrics() {
 			entry := &entries[i]
 			// fetch updated metrics using full entry context (nsip, node ip, cluster id)
 			loadMetrics := proxy.getInstanceLoadMetrics(entry.Nsip)
+			// Optionally apply smoothing (EMA) if enabled and we have previous metrics
 			entry.LoadMetrics = loadMetrics
 		}
 	}
 }
+
+func ema(prev, current, alpha float64) float64 { return prev*(1-alpha) + current*alpha }
 
 // getInstanceLoadMetrics retrieves metrics via MQTT table query and reads metrics from updated TableEntry in memory.
 func (proxy *GoProxyTunnel) getInstanceLoadMetrics(instanceIP net.IP) TableEntryCache.LoadMetrics {
