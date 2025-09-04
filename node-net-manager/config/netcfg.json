@@ -5,5 +5,11 @@
   "ClusterMqttPort": "10003",
   "Debug": false,
   "MqttCert": "",
-  "MqttKey": ""
+  "MqttKey": "",
+  "cluster_aware_routing": {
+    "enabled": true,
+    "load_threshold": 0.8,
+    "update_interval": 30,
+    "local_cluster_id": "cluster_1"
+  }
 }

@@ -69,6 +69,14 @@ func responseParser(responseStruct mqttifce.TableQueryResponse) ([]TableEntryCac
 			Nsip:             net.ParseIP(instance.NamespaceIp),
 			Nsipv6:           net.ParseIP(instance.NamespaceIpv6),
 			ServiceIP:        sipList,
+			ClusterId:        instance.ClusterId,
+		}
+
+		// Propagate optional load metrics if available
+		entry.LoadMetrics = TableEntryCache.LoadMetrics{
+			CpuUsage:          instance.LoadMetrics.CpuUsage,
+			MemoryUsage:       instance.LoadMetrics.MemoryUsage,
+			ActiveConnections: instance.LoadMetrics.ActiveConnections,
 		}
 
 		result = append(result, entry)
@@ -92,6 +100,10 @@ func toServiceIP(Type string, Addr string, Addr_v6 string) TableEntryCache.Servi
 	}
 	if Type == "InstanceNumber" {
 		ip.IpType = TableEntryCache.InstanceNumber
+	}
+	// New semantic IP type for cluster-aware routing
+	if strings.EqualFold(Type, "ClusterAware") || strings.EqualFold(Type, "cluster_aware_ip") || strings.EqualFold(Type, "CLUSTER_AWARE") {
+		ip.IpType = TableEntryCache.ClusterAware
 	}
 
 	return ip

@@ -33,14 +33,22 @@ type DeployResponse struct {
 	NsAddress   string `json:"nsAddress"`
 }
 
+type ClusterAwareRouting struct {
+	Enabled        bool    `json:"enabled"`
+	LoadThreshold  float64 `json:"load_threshold"`
+	UpdateInterval int     `json:"update_interval"`
+	LocalClusterId string  `json:"local_cluster_id"`
+}
+
 type netConfiguration struct {
-	NodePublicAddress string
-	NodePublicPort    string
-	ClusterUrl        string
-	ClusterMqttPort   string
-	Debug             bool
-	MqttCert          string
-	MqttKey           string
+	NodePublicAddress   string              `json:"NodePublicAddress"`
+	NodePublicPort      string              `json:"NodePublicPort"`
+	ClusterUrl          string              `json:"ClusterUrl"`
+	ClusterMqttPort     string              `json:"ClusterMqttPort"`
+	Debug               bool                `json:"Debug"`
+	MqttCert            string              `json:"MqttCert"`
+	MqttKey             string              `json:"MqttKey"`
+	ClusterAwareRouting ClusterAwareRouting `json:"cluster_aware_routing"`
 }
 
 func HandleRequests(port int) {
@@ -131,6 +139,13 @@ func register(writer http.ResponseWriter, request *http.Request) {
 
 	// initialize the proxy tunnel
 	Proxy = proxy.New()
+
+	// Wire cluster-aware routing configuration
+	Proxy.SetClusterAwareRouting(Configuration.ClusterAwareRouting.Enabled)
+	Proxy.SetLocalClusterId(Configuration.ClusterAwareRouting.LocalClusterId)
+	Proxy.SetLoadThreshold(Configuration.ClusterAwareRouting.LoadThreshold)
+	Proxy.StartLoadMonitoring(Configuration.ClusterAwareRouting.UpdateInterval)
+
 	Proxy.Listen()
 
 	// initialize the Env Manager

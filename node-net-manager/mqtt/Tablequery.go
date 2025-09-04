@@ -47,6 +47,12 @@ type ServiceInstance struct {
 	HostIp         string `json:"host_ip"`
 	HostPort       int    `json:"host_port"`
 	ServiceIp      []Sip  `json:"service_ip"`
+	ClusterId      string `json:"cluster_id,omitempty"`
+	LoadMetrics    struct {
+		CpuUsage          float64 `json:"cpu_usage,omitempty"`
+		MemoryUsage       float64 `json:"memory_usage,omitempty"`
+		ActiveConnections int     `json:"active_connections,omitempty"`
+	} `json:"load_metrics,omitempty"`
 }
 
 type Sip struct {
