@@ -1,6 +1,5 @@
 version: "3.3"
 services:
-
   # cluster-level mongoDB
   mongo_clusternet:
     image: mongo:3.6
@@ -9,11 +8,10 @@ services:
     ports:
       - "10108:10108"
     volumes:
-      - 'mongodb_cluster_net_data:/mongodb'
+      - "mongodb_cluster_net_data:/mongodb"
     command: mongod --port 10108
 
-
-# Cluster Manager
+  # Cluster Manager
   cluster_service_manager:
     image: cluster_service_manager
     build: service-manager/
@@ -33,6 +31,7 @@ services:
       - SYSTEM_MANAGER_PORT=10000
       - CLUSTER_MONGO_URL=cluster_mongo_net
       - CLUSTER_MONGO_PORT=10108
+      - CLUSTER_ID=${CLUSTER_ID:-cluster_1}
     depends_on:
       - mongo_clusternet
 
