@@ -1,8 +1,11 @@
 from interfaces import mongodb_requests
 from interfaces import root_service_manager_requests
 import copy
+import os
 
 from interfaces.mongodb_requests import mongo_update_job_instance
+
+CLUSTER_ID = os.environ.get("CLUSTER_ID", "")
 
 
 def service_resolution(service_name):
@@ -81,10 +84,17 @@ def service_resolution_ip(ip_string):
 
 def format_instance_response(instance_list, sip_list):
     for elem in instance_list:
+        # attach service IPs
         elem['service_ip'] = copy.deepcopy(sip_list)
         elem['service_ip'].append({
             "IpType": "instance_ip",
             "Address": elem['instance_ip'],
             "Address_v6": elem['instance_ip_v6']
         })
+        # annotate cluster id for cluster-aware routing
+        if CLUSTER_ID:
+            elem['cluster_id'] = CLUSTER_ID
+        # ensure load_metrics present if tracked in DB
+        
+        # leave as-is if not available to minimize overhead
     return instance_list
