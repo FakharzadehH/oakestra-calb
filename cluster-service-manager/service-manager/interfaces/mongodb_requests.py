@@ -117,6 +117,8 @@ def mongo_update_job_instance(job_name, instance):
                     "instance_list.$.namespace_ip_v6": instance.get('namespace_ip_v6'),
                     "instance_list.$.host_ip": instance.get('host_ip'),
                     "instance_list.$.host_port": instance.get('host_port'),
+                    "instance_list.$.cluster_id": instance.get('cluster_id'),
+                    "instance_list.$.load_metrics": instance.get('load_metrics'),
                 }
             }
         )
@@ -232,3 +234,17 @@ def mongo_remove_interest(job_name, clientid):
                     "interested_nodes": interested_nodes
                 }}
             )
+
+def mongo_update_instance_load_metrics(job_name, instance_number, load_metrics):
+    """Update load metrics for a specific instance"""
+    mongo_jobs.db.jobs.update_one(
+        {
+            'job_name': job_name,
+            "instance_list.instance_number": instance_number
+        },
+        {
+            '$set': {
+                "instance_list.$.load_metrics": load_metrics
+            }
+        }
+    )

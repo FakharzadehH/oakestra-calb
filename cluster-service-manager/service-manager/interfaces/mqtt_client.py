@@ -1,6 +1,6 @@
 import re
 import traceback
-from interfaces.mongodb_requests import mongo_find_node_by_id_and_update_subnetwork
+from interfaces.mongodb_requests import mongo_find_node_by_id_and_update_subnetwork, mongo_update_instance_load_metrics
 from network.deployment import *
 from network.tablequery import resolution, interests
 import paho.mqtt.client as paho_mqtt
@@ -15,6 +15,8 @@ def handle_connect(client, userdata, flags, rc):
     global app
     app.logger.info("MQTT - Connected to MQTT Broker")
     mqtt.subscribe(topic="nodes/+/net/#", qos=1)
+    # subscribe to load metrics from node engines
+    mqtt.subscribe(topic="nodes/+/jobs/load_metrics", qos=1)
 
 
 def handle_mqtt_message(client, userdata, message):
@@ -32,6 +34,7 @@ def handle_mqtt_message(client, userdata, message):
         "^nodes/.*/net/tablequery/request", topic)
     re_job_subnet_topic = re.search("^nodes/.*/net/subnet", topic)
     re_job_interest_remove = re.search("^nodes/.*/net/interest/remove", topic)
+    re_job_load_metrics = re.search("^nodes/.*/jobs/load_metrics", topic)
 
     topic_split = topic.split("/")
     client_id = topic_split[1]
@@ -52,6 +55,9 @@ def handle_mqtt_message(client, userdata, message):
     if re_job_interest_remove is not None:
         logging.debug("JOB-INTEREST-REMOVE")
         _interest_remove_handler(client_id, payload)
+    if re_job_load_metrics is not None:
+        logging.debug("JOB-LOAD-METRICS")
+        _load_metrics_handler(client_id, payload)
 
 
 def mqtt_init(flask_app):
@@ -110,6 +116,29 @@ def _undeployment_handler(client_id, payload):
 def _interest_remove_handler(client_id, payload):
     appname = payload.get("appname")
     interests.remove_interest(appname, client_id)
+
+
+def _load_metrics_handler(client_id, payload):
+    """Handle per-instance load metrics updates.
+    Expected payload: {"load_metrics":[{"job_name":"a.b.c.d","instance_number":0,"cpu_usage":0.1,"memory_usage":0.2,"active_connections":5}, ...]}
+    """
+    metrics_list = payload.get("load_metrics", [])
+    if not isinstance(metrics_list, list):
+        return
+    for m in metrics_list:
+        try:
+            job_name = m.get("job_name")
+            instance_number = m.get("instance_number")
+            if job_name is None or instance_number is None:
+                continue
+            load_metrics = {
+                "cpu_usage": m.get("cpu_usage", 0),
+                "memory_usage": m.get("memory_usage", 0),
+                "active_connections": m.get("active_connections", -1),
+            }
+            mongo_update_instance_load_metrics(job_name, instance_number, load_metrics)
+        except Exception as e:
+            logging.error(f"Error updating load metrics: {e}")
 
 
 def _tablequery_handler(client_id, payload):
