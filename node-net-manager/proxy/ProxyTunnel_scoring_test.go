@@ -26,6 +26,7 @@ func TestCalculateInstanceScore_WeightsApplied(t *testing.T) {
 	p.SetWeights(0.5, 0.3, 0.2)
 	inst := TableEntryCache.TableEntry{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.2, MemoryUsage: 0.4, ActiveConnections: 20, Timestamp: time.Now().UnixMilli()}}
 	score := p.calculateInstanceScore(&inst)
+	t.Logf("WeightsApplied: cpu=%.2f mem=%.2f conn=%d -> score=%.4f (weights cpu=%.2f mem=%.2f conn=%.2f)", inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage, inst.LoadMetrics.ActiveConnections, score, p.cpuWeight, p.memoryWeight, p.connWeight)
 	if score <= 0 || score > 1 {
 		t.Fatalf("unexpected score range: %f", score)
 	}
@@ -38,6 +39,8 @@ func TestCalculateInstanceScore_StaleMetricsPenalized(t *testing.T) {
 	staleTs := time.Now().Add(-30 * time.Second).UnixMilli()
 	inst := TableEntryCache.TableEntry{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.1, MemoryUsage: 0.1, ActiveConnections: 5, Timestamp: staleTs}}
 	score := p.calculateInstanceScore(&inst)
+	age := time.Since(time.UnixMilli(staleTs))
+	t.Logf("StaleMetrics: age=%s ttl=%s raw_load(cpu=%.2f,mem=%.2f,conn=%d) -> score=%.6f", age, p.metricsTTL, inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage, inst.LoadMetrics.ActiveConnections, score)
 	if score > 0.001 {
 		t.Fatalf("expected heavy penalty for stale metrics, got %f", score)
 	}
@@ -49,6 +52,7 @@ func TestCalculateInstanceScore_DefaultWeightsFallback(t *testing.T) {
 	p.SetWeights(0, 0, 0)
 	inst := TableEntryCache.TableEntry{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.5, MemoryUsage: 0.5, ActiveConnections: 50, Timestamp: time.Now().UnixMilli()}}
 	score := p.calculateInstanceScore(&inst)
+	t.Logf("DefaultWeightsFallback: userWeights=(0,0,0) fallbackApplied cpu=%.2f mem=%.2f conn=%d -> score=%.4f", inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage, inst.LoadMetrics.ActiveConnections, score)
 	if score <= 0 {
 		t.Fatalf("expected positive score with fallback weights, got %f", score)
 	}

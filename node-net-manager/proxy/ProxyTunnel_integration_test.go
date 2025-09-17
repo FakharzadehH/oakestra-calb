@@ -45,6 +45,7 @@ func TestClusterAware_MixedLocalRemoteSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	t.Logf("MixedLocalRemoteSelection: chosen=%s expectedLocal=%s threshold=%.2f localGoodLoad=cpu%.2f/mem%.2f", dst, localGood.Nsip, p.loadThreshold, localGood.LoadMetrics.CpuUsage, localGood.LoadMetrics.MemoryUsage)
 	if !dst.Equal(localGood.Nsip) {
 		t.Fatalf("expected healthy local instance %s, got %s", localGood.Nsip, dst)
 	}
@@ -75,6 +76,7 @@ func TestClusterAware_StaleLocalFallsBackToRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	t.Logf("StaleLocalFallback: chosen=%s expectedRemote=%s ttl=%s localTs(stale)=%d remoteTs(fresh)=%d", dst, remoteFresh.Nsip, p.metricsTTL, localStale.LoadMetrics.Timestamp, remoteFresh.LoadMetrics.Timestamp)
 	if !dst.Equal(remoteFresh.Nsip) {
 		t.Fatalf("expected remote fallback %s due to stale local metrics, got %s", remoteFresh.Nsip, dst)
 	}
@@ -105,6 +107,7 @@ func TestClusterAware_WeightInfluenceLocalChoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error (cpu weight phase): %v", err)
 	}
+	t.Logf("WeightInfluence CPU phase: weights=(%.2f,%.2f,%.2f) chose=%s A(cpu%.2f/mem%.2f) B(cpu%.2f/mem%.2f)", p.cpuWeight, p.memoryWeight, p.connWeight, dst1, instA.LoadMetrics.CpuUsage, instA.LoadMetrics.MemoryUsage, instB.LoadMetrics.CpuUsage, instB.LoadMetrics.MemoryUsage)
 	if !dst1.Equal(instA.Nsip) {
 		t.Fatalf("expected CPU-favored instance A %s, got %s", instA.Nsip, dst1)
 	}
@@ -115,6 +118,7 @@ func TestClusterAware_WeightInfluenceLocalChoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error (memory weight phase): %v", err)
 	}
+	t.Logf("WeightInfluence Memory phase: weights=(%.2f,%.2f,%.2f) chose=%s A(cpu%.2f/mem%.2f) B(cpu%.2f/mem%.2f)", p.cpuWeight, p.memoryWeight, p.connWeight, dst2, instA.LoadMetrics.CpuUsage, instA.LoadMetrics.MemoryUsage, instB.LoadMetrics.CpuUsage, instB.LoadMetrics.MemoryUsage)
 	if !dst2.Equal(instB.Nsip) {
 		t.Fatalf("expected Memory-favored instance B %s, got %s", instB.Nsip, dst2)
 	}
