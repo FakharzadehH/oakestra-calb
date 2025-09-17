@@ -45,6 +45,8 @@ func TestGetClusterAwareDestination_PrefersLocalBelowThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
+	// Logging
+	t.Logf("PrefersLocalBelowThreshold: svcIP=%s chosen=%s local=%s remote=%s threshold=%.2f localLoad(cpu%.2f/mem%.2f) remoteLoad(cpu%.2f/mem%.2f)", svcIP, dst, localNs, remoteNs, p.loadThreshold, entries[0].LoadMetrics.CpuUsage, entries[0].LoadMetrics.MemoryUsage, entries[1].LoadMetrics.CpuUsage, entries[1].LoadMetrics.MemoryUsage)
 	if !dst.Equal(localNs) {
 		t.Fatalf("expected local nsip %s, got %s", localNs, dst)
 	}
@@ -72,6 +74,7 @@ func TestGetClusterAwareDestination_FallbackToRemoteWhenOverThreshold(t *testing
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
+	t.Logf("FallbackToRemoteWhenOverThreshold: svcIP=%s chosen=%s local=%s remote=%s threshold=%.2f localLoad(cpu%.2f/mem%.2f) remoteLoad(cpu%.2f/mem%.2f)", svcIP, dst, localNs, remoteNs, p.loadThreshold, entries[0].LoadMetrics.CpuUsage, entries[0].LoadMetrics.MemoryUsage, entries[1].LoadMetrics.CpuUsage, entries[1].LoadMetrics.MemoryUsage)
 	if !dst.Equal(remoteNs) {
 		t.Fatalf("expected remote nsip %s, got %s", remoteNs, dst)
 	}
@@ -98,6 +101,7 @@ func TestToServiceIP_ClusterAwareSelection_UsesIPv6WhenPreferred(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
+	t.Logf("IPv6Preference: svcIP=%s chosen=%s expectedIPv6=%s cpu=%.2f mem=%.2f", svcIP, dst, localNs6, entries[0].LoadMetrics.CpuUsage, entries[0].LoadMetrics.MemoryUsage)
 	if !dst.Equal(localNs6) {
 		t.Fatalf("expected local nsipv6 %s, got %s", localNs6, dst)
 	}
