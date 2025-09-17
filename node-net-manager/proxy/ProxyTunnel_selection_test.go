@@ -14,12 +14,15 @@ func TestSelectBestLocalInstance_SkipsOverThreshold(t *testing.T) {
 		{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.6, MemoryUsage: 0.6, Timestamp: time.Now().UnixMilli()}}, // avg 0.6 > 0.4 -> skip
 		{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.3, MemoryUsage: 0.3, Timestamp: time.Now().UnixMilli()}}, // avg 0.3 -> eligible
 	}
-	for i, inst := range instances { avg := (inst.LoadMetrics.CpuUsage + inst.LoadMetrics.MemoryUsage)/2; t.Logf("Instance[%d] cpu=%.2f mem=%.2f avg=%.2f", i, inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage, avg) }
+	for i, inst := range instances {
+		avg := (inst.LoadMetrics.CpuUsage + inst.LoadMetrics.MemoryUsage) / 2
+		t.Logf("Instance[%d] cpu=%.2f mem=%.2f avg=%.2f", i, inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage, avg)
+	}
 	chosen := p.selectBestLocalInstance(instances)
 	if chosen == nil {
 		t.Fatalf("expected a local instance to be selected")
 	}
-	avgChosen := (chosen.LoadMetrics.CpuUsage + chosen.LoadMetrics.MemoryUsage)/2
+	avgChosen := (chosen.LoadMetrics.CpuUsage + chosen.LoadMetrics.MemoryUsage) / 2
 	t.Logf("Chosen cpu=%.2f mem=%.2f avg=%.2f threshold=%.2f", chosen.LoadMetrics.CpuUsage, chosen.LoadMetrics.MemoryUsage, avgChosen, p.loadThreshold)
 	if chosen.LoadMetrics.CpuUsage != 0.3 {
 		t.Fatalf("expected lower-load instance chosen, got cpu=%v", chosen.LoadMetrics.CpuUsage)
@@ -38,7 +41,10 @@ func TestSelectBestLocalInstance_PrefersFreshOverStale(t *testing.T) {
 		{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.2, MemoryUsage: 0.2, ActiveConnections: 10, Timestamp: staleTs}},
 		{LoadMetrics: TableEntryCache.LoadMetrics{CpuUsage: 0.2, MemoryUsage: 0.2, ActiveConnections: 10, Timestamp: freshTs}},
 	}
-	for i, inst := range instances { age := time.Since(time.UnixMilli(inst.LoadMetrics.Timestamp)); t.Logf("Instance[%d] ts=%d age=%s cpu=%.2f mem=%.2f", i, inst.LoadMetrics.Timestamp, age, inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage) }
+	for i, inst := range instances {
+		age := time.Since(time.UnixMilli(inst.LoadMetrics.Timestamp))
+		t.Logf("Instance[%d] ts=%d age=%s cpu=%.2f mem=%.2f", i, inst.LoadMetrics.Timestamp, age, inst.LoadMetrics.CpuUsage, inst.LoadMetrics.MemoryUsage)
+	}
 	chosen := p.selectBestLocalInstance(instances)
 	if chosen == nil {
 		t.Fatalf("expected selection of a fresh instance")

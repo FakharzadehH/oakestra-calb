@@ -54,6 +54,7 @@ actions = []
 
 def fake_mongo_update(job_name, instance_number, load_metrics):
     actions.append((job_name, instance_number, load_metrics))
+    print(f"Captured update: job={job_name} inst={instance_number} cpu={load_metrics.get('cpu_usage')} mem={load_metrics.get('memory_usage')} active={load_metrics.get('active_connections')} ts={load_metrics.get('timestamp')}")
 
 
 class TestLoadMetricsHandler(unittest.TestCase):
@@ -61,11 +62,15 @@ class TestLoadMetricsHandler(unittest.TestCase):
         mqtt_client.app = DummyApp()
         actions.clear()
         mqtt_client.mongo_update_instance_load_metrics = fake_mongo_update
-        payload = {"load_metrics": [
-            {"job_name": "svc.a", "instance_number": 0, "cpu_usage": 0.1, "memory_usage": 0.2, "active_connections": 5, "timestamp": 111},
-            {"job_name": "svc.b", "instance_number": 1, "cpu_usage": 0.3, "memory_usage": 0.4, "active_connections": -1, "timestamp": 112},
-        ]}
+        payload = {
+            "load_metrics": [
+                {"job_name": "svc.a", "instance_number": 0, "cpu_usage": 0.1, "memory_usage": 0.2, "active_connections": 5, "timestamp": 111},
+                {"job_name": "svc.b", "instance_number": 1, "cpu_usage": 0.3, "memory_usage": 0.4, "active_connections": -1, "timestamp": 112},
+            ]
+        }
+        print("Invoking _load_metrics_handler with payload entries=", len(payload["load_metrics"]))
         mqtt_client._load_metrics_handler("node1", payload)
+        print("Total actions recorded=", len(actions))
         self.assertEqual(len(actions), 2)
         self.assertEqual(actions[0][0], 'svc.a')
         self.assertEqual(actions[0][2]['cpu_usage'], 0.1)
@@ -75,9 +80,13 @@ class TestLoadMetricsHandler(unittest.TestCase):
         mqtt_client.app = DummyApp()
         actions.clear()
         mqtt_client.mongo_update_instance_load_metrics = fake_mongo_update
+        print("Testing bad payload (dict instead of list)")
         mqtt_client._load_metrics_handler("node1", {"load_metrics": {"bad": "dict"}})
+        print("Actions after bad payload=", len(actions))
         self.assertEqual(len(actions), 0)
+        print("Testing missing load_metrics key")
         mqtt_client._load_metrics_handler("node1", {"other": []})
+        print("Actions after missing key=", len(actions))
         self.assertEqual(len(actions), 0)
 
 

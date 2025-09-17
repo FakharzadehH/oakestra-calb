@@ -41,6 +41,7 @@ func TestResponseParser_ClusterIdAndLoadMetrics(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
 	entry := entries[0]
+	t.Logf("Parsed entry: clusterId=%s cpu=%.2f mem=%.2f active_connections=%d serviceIPs=%d", entry.ClusterId, entry.LoadMetrics.CpuUsage, entry.LoadMetrics.MemoryUsage, entry.LoadMetrics.ActiveConnections, len(entry.ServiceIP))
 
 	if entry.ClusterId != "cluster_1" {
 		t.Errorf("ClusterId not propagated. got=%q", entry.ClusterId)
@@ -58,6 +59,21 @@ func TestResponseParser_ClusterIdAndLoadMetrics(t *testing.T) {
 			}
 			foundCA = true
 		}
+		// per SIP logging
+		ipType := "other"
+		if sip.IpType == TableEntryCache.ClusterAware {
+			ipType = "ClusterAware"
+		}
+		if sip.IpType == TableEntryCache.RoundRobin {
+			ipType = "RR"
+		}
+		if sip.IpType == TableEntryCache.Closest {
+			ipType = "Closest"
+		}
+		if sip.IpType == TableEntryCache.InstanceNumber {
+			ipType = "InstanceNumber"
+		}
+		t.Logf("ServiceIP parsed: addr=%s addr_v6=%s type=%s", sip.Address, sip.Address_v6, ipType)
 	}
 	if !foundCA {
 		t.Errorf("ClusterAware ServiceIP not found in parsed entry")
@@ -71,5 +87,6 @@ func TestToServiceIP_ClusterAwareMapping(t *testing.T) {
 		if sip.IpType != TableEntryCache.ClusterAware {
 			t.Errorf("type %q did not map to ClusterAware, got %v", typ, sip.IpType)
 		}
+		t.Logf("Mapping test: inputType=%s mappedType=%v", typ, sip.IpType)
 	}
 }
