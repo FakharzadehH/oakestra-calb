@@ -27,7 +27,8 @@ func TestResponseParser_ClusterIdAndLoadMetrics(t *testing.T) {
 					MemoryUsage       float64 `json:"memory_usage,omitempty"`
 					ActiveConnections int     `json:"active_connections,omitempty"`
 					Timestamp         int64   `json:"timestamp,omitempty"`
-				}{CpuUsage: 0.35, MemoryUsage: 0.5, ActiveConnections: 12},
+					ClusterId         string  `json:"cluster_id,omitempty"`
+				}{CpuUsage: 0.35, MemoryUsage: 0.5, ActiveConnections: 12, ClusterId: "cluster_1"},
 			},
 		},
 		QueryKey: "10.30.2.1",
