@@ -466,6 +466,10 @@ func (proxy *GoProxyTunnel) ifaceread(ifce *water.Interface, out chan<- outgoing
 // out channel gives back the byte array of the output
 // errchannel is the channel where in case of error the error is routed
 func (proxy *GoProxyTunnel) udpread(conn *net.UDPConn, out chan<- incomingMessage, errchannel chan<- error) {
+	if conn == nil {
+		// lightweight mode: no UDP listener created
+		return
+	}
 	buffer := make([]byte, BUFFER_SIZE)
 	for {
 		packet := buffer
