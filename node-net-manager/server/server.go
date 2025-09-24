@@ -155,7 +155,23 @@ func register(writer http.ResponseWriter, request *http.Request) {
 	Proxy.Listen()
 
 	// initialize the Env Manager
-	Env = *env.NewEnvironmentClusterConfigured(Proxy.HostTUNDeviceName)
+	if os.Getenv("TEST_LIGHTWEIGHT_PROXY") == "1" {
+		logger.InfoLogger().Println("TEST_LIGHTWEIGHT_PROXY=1: using static environment config (no subnet MQTT)")
+		// Minimal static config for demo/testing
+		cfg := env.Configuration{
+			HostBridgeName:             "goProxyBridge",
+			HostBridgeIP:               "10.19.1.1",
+			HostBridgeMask:             "/26",
+			HostBridgeIPv6:             "fcef::1",
+			HostBridgeIPv6Prefix:       "/120",
+			HostTunName:                Proxy.HostTUNDeviceName,
+			ConnectedInternetInterface: "",
+			Mtusize:                    1450,
+		}
+		Env = *env.NewCustom(Proxy.HostTUNDeviceName, cfg)
+	} else {
+		Env = *env.NewEnvironmentClusterConfigured(Proxy.HostTUNDeviceName)
+	}
 
 	Proxy.SetEnvironment(&Env)
 
