@@ -112,11 +112,18 @@ func (proxy *GoProxyTunnel) IsListening() bool {
 
 // start listening for packets in the TUN Proxy device
 func (proxy *GoProxyTunnel) Listen() {
-	if !proxy.isListening {
-		logger.InfoLogger().Println("Starting proxy listening mode")
-		go proxy.tunOutgoingListen()
-		go proxy.tunIngoingListen()
+	if proxy.isListening {
+		return
 	}
+	// In lightweight test mode, skip starting TUN/UDP listeners entirely
+	if os.Getenv("TEST_LIGHTWEIGHT_PROXY") == "1" {
+		logger.InfoLogger().Println("TEST_LIGHTWEIGHT_PROXY=1: skipping proxy listeners (no TUN/UDP)")
+		proxy.isListening = true
+		return
+	}
+	logger.InfoLogger().Println("Starting proxy listening mode")
+	go proxy.tunOutgoingListen()
+	go proxy.tunIngoingListen()
 }
 
 // create an instance of the proxy TUN device and setup the environment
