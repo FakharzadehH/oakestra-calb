@@ -1,5 +1,6 @@
 import re
 import traceback
+import os
 from interfaces.mongodb_requests import mongo_find_node_by_id_and_update_subnetwork, mongo_update_instance_load_metrics
 from network.deployment import *
 from network.tablequery import resolution, interests
@@ -137,6 +138,10 @@ def _load_metrics_handler(client_id, payload):
                 "active_connections": m.get("active_connections", -1),
                 "timestamp": m.get("timestamp"),
             }
+            # propagate cluster_id if provided by publisher; fallback to local CLUSTER_ID for convenience
+            cid = m.get("cluster_id")
+            if cid is not None:
+                load_metrics["cluster_id"] = cid
             mongo_update_instance_load_metrics(job_name, instance_number, load_metrics)
         except Exception as e:
             logging.error(f"Error updating load metrics: {e}")
