@@ -69,7 +69,6 @@ func responseParser(responseStruct mqttifce.TableQueryResponse) ([]TableEntryCac
 			Nsip:             net.ParseIP(instance.NamespaceIp),
 			Nsipv6:           net.ParseIP(instance.NamespaceIpv6),
 			ServiceIP:        sipList,
-			ClusterId:        instance.ClusterId,
 		}
 
 		// Propagate optional load metrics if available

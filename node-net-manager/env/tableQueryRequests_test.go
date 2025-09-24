@@ -21,7 +21,6 @@ func TestResponseParser_ClusterIdAndLoadMetrics(t *testing.T) {
 					{Type: "RR", Address: "10.30.1.1", Address_v6: "fdff:2000::1"},
 					{Type: "ClusterAware", Address: "10.30.2.1", Address_v6: "fdff:2000::2"},
 				},
-				ClusterId: "cluster_1",
 				LoadMetrics: struct {
 					CpuUsage          float64 `json:"cpu_usage,omitempty"`
 					MemoryUsage       float64 `json:"memory_usage,omitempty"`
