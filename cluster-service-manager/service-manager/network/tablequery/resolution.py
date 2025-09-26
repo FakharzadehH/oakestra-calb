@@ -2,6 +2,7 @@ from interfaces import mongodb_requests
 from interfaces import root_service_manager_requests
 import copy
 import os
+import logging
 
 from interfaces.mongodb_requests import mongo_update_job_instance
 
@@ -92,9 +93,49 @@ def format_instance_response(instance_list, sip_list):
             "Address_v6": elem['instance_ip_v6']
         })
         # annotate cluster id for cluster-aware routing
-        if CLUSTER_ID:
-            elem['cluster_id'] = CLUSTER_ID
         # ensure load_metrics present if tracked in DB
-        
-        # leave as-is if not available to minimize overhead
+        # - If the DB contains a dict, normalize keys so JSON serialization is predictable
+        # - If the value is missing or explicitly null, remove the key so callers receive no field
+        lm = elem.get('load_metrics')
+        print("TABLEQUERY - raw load_metrics for %s: %s", elem.get('instance_ip'), lm)
+        if isinstance(lm, dict):
+            # normalize/whitelist keys to avoid passing DB-specific types
+            normalized = {
+                'cpu_usage': lm.get('cpu_usage', 0),
+                'memory_usage': lm.get('memory_usage', 0),
+                'active_connections': lm.get('active_connections', -1),
+                'timestamp': lm.get('timestamp'),
+            }
+            # propagate cluster_id if present inside load_metrics
+            if lm.get('cluster_id') is not None:
+                normalized['cluster_id'] = lm.get('cluster_id')
+                elem['cluster_id'] = lm.get('cluster_id')
+            elem['load_metrics'] = normalized
+            logging.debug("TABLEQUERY - attached load_metrics for %s: %s", elem.get('instance_ip'), normalized)
+        elif lm is None:
+            # remove explicit nulls so JSON will omit the field (Go side uses `omitempty`)
+            if 'load_metrics' in elem:
+                try:
+                    del elem['load_metrics']
+                except Exception:
+                    pass
+            logging.debug("TABLEQUERY - no load_metrics for %s", elem.get('instance_ip'))
+        else:
+            # Some BSON types returned by PyMongo may not be plain dicts but still behave like mappings.
+            # Try to normalize by accessing expected keys; if that fails, leave the original value untouched.
+            try:
+                normalized = {
+                    'cpu_usage': lm.get('cpu_usage', 0),
+                    'memory_usage': lm.get('memory_usage', 0),
+                    'active_connections': lm.get('active_connections', -1),
+                    'timestamp': lm.get('timestamp'),
+                }
+                if lm.get('cluster_id') is not None:
+                    normalized['cluster_id'] = lm.get('cluster_id')
+                    elem['cluster_id'] = lm.get('cluster_id')
+                elem['load_metrics'] = normalized
+                logging.debug("TABLEQUERY - normalized non-dict load_metrics for %s: %s", elem.get('instance_ip'), normalized)
+            except Exception:
+                # leave as-is (best-effort) so callers can still inspect raw value
+                logging.debug("TABLEQUERY - unexpected load_metrics type for %s, leaving raw value", elem.get('instance_ip'))
     return instance_list
