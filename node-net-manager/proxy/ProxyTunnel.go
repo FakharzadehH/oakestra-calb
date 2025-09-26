@@ -144,8 +144,10 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 			if isClusterAware {
 				sourceClusterId := proxy.getSourceClusterId(ip.GetSrcIP())
 				preferIPv6 := ip.GetProtocolVersion() == 6
+				logger.DebugLogger().Printf("Cluster-aware routing requested: src=%s dstServiceIP=%s srcCluster=%s preferIPv6=%v", ip.GetSrcIP().String(), ip.GetDestIP().String(), sourceClusterId, preferIPv6)
 				clusterAwareDest, err := proxy.getClusterAwareDestination(ip.GetDestIP(), sourceClusterId, preferIPv6)
 				if err == nil {
+					logger.DebugLogger().Printf("Cluster-aware selection chosen dest=%s", clusterAwareDest.String())
 					return proxy.createClusterAwarePacket(ip, prot, clusterAwareDest)
 				} else {
 					logger.DebugLogger().Printf("Cluster-aware selection fallback: %v", err)
@@ -153,6 +155,7 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 			}
 		}
 	}
+	logger.DebugLogger().Println("Non cluster-aware routing or no cluster info available, using existing logic")
 
 	// Fall back to existing logic for non-service calls
 	return proxy.outgoingProxyOriginal(ip, prot)
@@ -593,8 +596,10 @@ func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceC
 
 	// First, try to find a suitable local instance
 	if len(localInstances) > 0 {
+		logger.DebugLogger().Printf("Found %d local instances for cluster %s", len(localInstances), sourceClusterId)
 		localInstance := proxy.selectBestLocalInstance(localInstances)
 		if localInstance != nil {
+			logger.DebugLogger().Printf("Selected local instance %s (inst=%d) score metrics: cpu=%.2f mem=%.2f conns=%d ts=%d", localInstance.Nsip.String(), localInstance.Instancenumber, localInstance.LoadMetrics.CpuUsage, localInstance.LoadMetrics.MemoryUsage, localInstance.LoadMetrics.ActiveConnections, localInstance.LoadMetrics.Timestamp)
 			if preferIPv6 {
 				return localInstance.Nsipv6, nil
 			}
@@ -623,10 +628,13 @@ func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.
 	for i := range instances {
 		instance := &instances[i]
 
-		// Skip stale metrics entirely if TTL configured
-		if proxy.metricsTTL > 0 && instance.LoadMetrics.Timestamp > 0 {
+		// Log metrics presence and staleness check
+		if instance.LoadMetrics.Timestamp == 0 {
+			logger.DebugLogger().Printf("Instance %d has no load metrics; treating as unknown for scoring", instance.Instancenumber)
+		} else if proxy.metricsTTL > 0 {
 			age := time.Since(time.UnixMilli(instance.LoadMetrics.Timestamp))
 			if age > proxy.metricsTTL {
+				logger.DebugLogger().Printf("Instance %d metrics stale (age=%v > ttl=%v), skipping", instance.Instancenumber, age, proxy.metricsTTL)
 				continue
 			}
 		}
@@ -638,12 +646,15 @@ func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.
 			if instance.LoadMetrics.CpuUsage > 0 || instance.LoadMetrics.MemoryUsage > 0 {
 				effectiveLoad = (instance.LoadMetrics.CpuUsage + instance.LoadMetrics.MemoryUsage) / 2.0
 			}
+			logger.DebugLogger().Printf("Instance %d effectiveLoad=%.3f (cpu=%.3f mem=%.3f)", instance.Instancenumber, effectiveLoad, instance.LoadMetrics.CpuUsage, instance.LoadMetrics.MemoryUsage)
 			if effectiveLoad > proxy.loadThreshold {
+				logger.DebugLogger().Printf("Instance %d exceeds load threshold %.3f; skipping", instance.Instancenumber, proxy.loadThreshold)
 				continue
 			}
 		}
 
 		score := proxy.calculateInstanceScore(instance)
+		logger.DebugLogger().Printf("Instance %d score=%.4f (cpu=%.3f mem=%.3f conns=%d)", instance.Instancenumber, score, instance.LoadMetrics.CpuUsage, instance.LoadMetrics.MemoryUsage, instance.LoadMetrics.ActiveConnections)
 
 		// Prefer instances with higher score (lower load -> higher score)
 		if bestInstance == nil || score > bestScore {
@@ -667,6 +678,7 @@ func (proxy *GoProxyTunnel) calculateInstanceScore(instance *TableEntryCache.Tab
 		age := time.Since(time.UnixMilli(instance.LoadMetrics.Timestamp))
 		if age > proxy.metricsTTL {
 			// use negative score so any fresh instance with non-negative wins deterministically
+			logger.DebugLogger().Printf("Penalizing instance %d for stale metrics (age=%v > ttl=%v)", instance.Instancenumber, age, proxy.metricsTTL)
 			return -1.0
 		}
 	}
