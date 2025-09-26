@@ -1,6 +1,7 @@
 import re
 import traceback
 import os
+from interfaces import mongodb_requests
 from interfaces.mongodb_requests import mongo_find_node_by_id_and_update_subnetwork, mongo_update_instance_load_metrics
 from network.deployment import *
 from network.tablequery import resolution, interests
@@ -143,6 +144,26 @@ def _load_metrics_handler(client_id, payload):
             if cid is not None:
                 load_metrics["cluster_id"] = cid
             mongo_update_instance_load_metrics(job_name, instance_number, load_metrics)
+            # After persisting metrics, proactively push updated tablequery result to interested workers
+            try:
+                # Re-read job from DB to get the latest instance_list and service_ip_list
+                job = mongodb_requests.mongo_find_job_by_name(job_name)
+                if job is not None:
+                    instances = job.get('instance_list', [])
+                    siplist = job.get('service_ip_list', [])
+                    result = {
+                        "app_name": job_name,
+                        "instance_list": resolution.format_instance_response(instances, siplist),
+                        "query_key": job_name,
+                    }
+                    interested_workers = mongodb_requests.mongo_get_interest_workers(job_name)
+                    for worker in interested_workers:
+                        try:
+                            mqtt_publish_tablequery_result(worker, result)
+                        except Exception as e:
+                            logging.error(f"Error publishing refreshed tablequery to {worker}: {e}")
+            except Exception as e:
+                logging.error(f"Error preparing/pushing refreshed tablequery for {job_name}: {e}")
         except Exception as e:
             logging.error(f"Error updating load metrics: {e}")
 
