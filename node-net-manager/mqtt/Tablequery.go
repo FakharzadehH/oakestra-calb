@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"net"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,6 +31,8 @@ type TablequeryMqttInterface interface {
 type TableQueryRequestCache struct {
 	siprequests map[string]*[]chan TableQueryResponse
 	requestadd  sync.RWMutex
+	// lastQuery tracks the last time we completed a tablequery for a given reqname
+	lastQuery map[string]time.Time
 }
 
 /*---------------------------------------------------------*/
@@ -78,10 +82,24 @@ func GetTableQueryRequestCacheInstance() *TableQueryRequestCache {
 		tableQueryRequestCacheInstance = TableQueryRequestCache{
 			siprequests: make(map[string]*[]chan TableQueryResponse),
 			requestadd:  sync.RWMutex{},
+			lastQuery:   make(map[string]time.Time),
 		}
 
 	})
 	return &tableQueryRequestCacheInstance
+}
+
+// GetTableQueryTTL reads the TABLE_QUERY_TTL_SECONDS env var (fallback 30 seconds)
+func GetTableQueryTTL() int {
+	s := os.Getenv("TABLE_QUERY_TTL_SECONDS")
+	if s == "" {
+		return 30
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 30
+	}
+	return v
 }
 
 /*
@@ -98,8 +116,17 @@ func (cache *TableQueryRequestCache) tableQueryRequestBlocking(sip string, sname
 	}
 
 	// If the worker node already registered an interest towards this route, avoid new requests.
+	// allow re-query if the last successful query is older than TTL (default 30s)
+	var ttl = 30 * time.Second
+	if envTtl := GetTableQueryTTL(); envTtl > 0 {
+		ttl = time.Duration(envTtl) * time.Second
+	}
+	last, ok := cache.lastQuery[reqname]
 	if MqttIsInterestRegistered(reqname) && !force {
-		return TableQueryResponse{}, errors.New("interest already registered")
+		if ok && time.Since(last) < ttl {
+			return TableQueryResponse{}, errors.New("interest already registered")
+		}
+		// otherwise allow a new table query to refresh cached entries
 	}
 
 	responseChannel := make(chan TableQueryResponse, 10)
@@ -128,6 +155,8 @@ func (cache *TableQueryRequestCache) tableQueryRequestBlocking(sip string, sname
 	log.Printf("waiting for table query %s", reqname)
 	select {
 	case result := <-responseChannel:
+		// record the time of the last successful query for this reqname
+		cache.lastQuery[reqname] = time.Now()
 		return result, nil
 	case <-time.After(5 * time.Second):
 		logger.ErrorLogger().Printf("TIMEOUT - Table query without response, quitting goroutine")
