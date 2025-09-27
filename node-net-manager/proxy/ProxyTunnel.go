@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -180,6 +181,7 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 					// Create a proxycache entry for reverse translations so replies from the instance
 					// can be mapped back to the original client. Use the table entry matched by
 					// the chosen namespace IP to populate node-specific fields.
+					logger.DebugLogger().Printf("Cluster-aware pre-cache: orig src=%s:%d dstService=%s dstPort=%d candidateInstance=%s", ip.GetSrcIP(), prot.GetSourcePort(), ip.GetDestIP(), prot.GetDestPort(), clusterAwareDest)
 					var conv ConversionEntry
 					conv.srcip = ip.GetSrcIP()
 					conv.dstServiceIp = ip.GetDestIP()
@@ -199,6 +201,7 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 					if conv.dstport > 0 && conv.srcport > 0 {
 						proxy.proxycache.Add(conv)
 					}
+					logger.DebugLogger().Printf("Cluster-aware rewrite: new dst=%s keep src=%s", clusterAwareDest, ip.GetSrcIP())
 					return proxy.createClusterAwarePacket(ip, prot, clusterAwareDest)
 				} else {
 					logger.ErrorLogger().Printf("Cluster-aware selection fallback: %v", err)
@@ -479,7 +482,11 @@ func (proxy *GoProxyTunnel) forward(dstHost net.IP, dstPort int, packet gopacket
 
 	// Check udp channel buffer to avoid creating a new channel
 	proxy.udpwrite.Lock()
-	hoststring := fmt.Sprintf("%s:%v", dstHost, dstPort)
+	if dstPort <= 0 {
+		logger.ErrorLogger().Printf("Missing node port for %s, defaulting to proxy tunnel port %d", dstHost.String(), proxy.TunnelPort)
+		dstPort = proxy.TunnelPort
+	}
+	hoststring := net.JoinHostPort(dstHost.String(), strconv.Itoa(dstPort))
 	con, exist := proxy.connectionBuffer[hoststring]
 	proxy.udpwrite.Unlock()
 	// TODO: flush connection buffer by time to time
