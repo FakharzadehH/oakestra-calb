@@ -96,7 +96,14 @@ func (proxy *GoProxyTunnel) outgoingMessage() {
 			logger.ErrorLogger().Println("Unable to convert the packet")
 			continue
 		}
-		dstHost, dstPort := proxy.locateRemoteAddress(ip.GetDestIP())
+		// Determine the actual destination from the new packet (outgoingProxy may have rewritten dst)
+		newPacketBytes := packetToByte(newPacket)
+		rewrittenNet, _ := decodePacket(newPacketBytes)
+		if rewrittenNet == nil {
+			logger.ErrorLogger().Println("Unable to decode rewritten packet to determine destination")
+			continue
+		}
+		dstHost, dstPort := proxy.locateRemoteAddress(rewrittenNet.GetDestIP())
 		proxy.forward(dstHost, dstPort, newPacket, 0)
 	}
 }
@@ -149,6 +156,28 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 				clusterAwareDest, err := proxy.getClusterAwareDestination(ip.GetDestIP(), sourceClusterId, preferIPv6)
 				if err == nil {
 					logger.InfoLogger().Printf("Cluster-aware selection chosen dest=%s", clusterAwareDest.String())
+					// Create a proxycache entry for reverse translations so replies from the instance
+					// can be mapped back to the original client. Use the table entry matched by
+					// the chosen namespace IP to populate node-specific fields.
+					var conv ConversionEntry
+					conv.srcip = ip.GetSrcIP()
+					conv.dstServiceIp = ip.GetDestIP()
+					conv.srcport = int(prot.GetSourcePort())
+					conv.dstport = int(prot.GetDestPort())
+					// Lookup table entry by namespace IP to obtain the node IP and canonical instance IP
+					if te, ok := proxy.environment.GetTableEntryByNsIP(clusterAwareDest); ok {
+						conv.dstip = te.Nodeip
+						// srcInstanceIp is the instance's IP within its namespace
+						conv.srcInstanceIp = clusterAwareDest
+					} else {
+						// Fallback: use namespace IP as both instance and node address — best-effort
+						conv.dstip = clusterAwareDest
+						conv.srcInstanceIp = clusterAwareDest
+					}
+					// Only add to proxycache if we have ports
+					if conv.dstport > 0 && conv.srcport > 0 {
+						proxy.proxycache.Add(conv)
+					}
 					return proxy.createClusterAwarePacket(ip, prot, clusterAwareDest)
 				} else {
 					logger.ErrorLogger().Printf("Cluster-aware selection fallback: %v", err)
@@ -296,7 +325,8 @@ func (proxy *GoProxyTunnel) ingoingProxy(ip iputils.NetworkLayerPacket, prot ipu
 	entry, exist := proxy.proxycache.RetrieveByInstanceIp(ip.GetDestIP(), dstport, srcport)
 
 	if !exist {
-		// No proxy proxycache entry, no translation needed
+		// No proxy proxycache entry, log detailed info for debugging
+		logger.DebugLogger().Printf("No proxycache entry for incoming packet: dest=%s dstport=%d srcport=%d", ip.GetDestIP().String(), dstport, srcport)
 		return nil
 	}
 
@@ -422,12 +452,13 @@ func (proxy *GoProxyTunnel) forward(dstHost net.IP, dstPort int, packet gopacket
 	}
 
 	// send via UDP channel
+	logger.DebugLogger().Printf("Forwarding packet to %s:%d (attempt=%d)", dstHost.String(), dstPort, attemptNumber)
 	proxy.udpwrite.Lock()
 	_, _, err := (*con).WriteMsgUDP(packetBytes, nil, nil)
 	proxy.udpwrite.Unlock()
 	if err != nil {
 		_ = (*con).Close()
-		logger.ErrorLogger().Println(err)
+		logger.ErrorLogger().Printf("UDP write error to %s: %v", hoststring, err)
 		connection, err := createUDPChannel(hoststring)
 		if nil != err {
 			return

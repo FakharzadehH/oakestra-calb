@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"NetManager/logger"
 	"net"
 	"sync"
 	"time"
@@ -66,17 +67,33 @@ func (cache *ProxyCache) RetrieveByInstanceIp(srcip net.IP, srcport int, dstport
 	if elem.conversionList != nil {
 		for _, entry := range elem.conversionList {
 			if entry.dstport == dstport && entry.srcip.Equal(srcip) {
+				logger.DebugLogger().Printf("ProxyCache hit: srcip=%s srcport=%d dstport=%d -> dstip=%s dstServiceIp=%s srcInstanceIp=%s", entry.srcip.String(), entry.srcport, entry.dstport, entry.dstip.String(), entry.dstServiceIp.String(), entry.srcInstanceIp.String())
 				return entry, true
 			}
 		}
 	}
+	logger.DebugLogger().Printf("ProxyCache miss: lookup srcip=%s srcport=%d dstport=%d", srcip.String(), srcport, dstport)
 	return ConversionEntry{}, false
+}
+
+// RetrieveByInstanceIpWithLog is helper that logs retrieval attempts (used for debugging)
+func (cache *ProxyCache) RetrieveByInstanceIpWithLog(srcip net.IP, srcport int, dstport int) (ConversionEntry, bool) {
+	e, ok := cache.RetrieveByInstanceIp(srcip, srcport, dstport)
+	if ok {
+		// best-effort log
+		// Note: avoid too verbose production logging
+		return e, true
+	}
+	return e, false
 }
 
 // Add new conversion entry, if srcpip && srcport already added the entry is updated
 func (cache *ProxyCache) Add(entry ConversionEntry) {
 	cache.rwlock.Lock()
 	defer cache.rwlock.Unlock()
+
+	// Debug: log cache addition summary (avoid heavy printing of IPs in production)
+	logger.DebugLogger().Printf("ProxyCache add: srcip=%s srcport=%d dstip=%s dstport=%d dstServiceIp=%s srcInstanceIp=%s", entry.srcip.String(), entry.srcport, entry.dstip.String(), entry.dstport, entry.dstServiceIp.String(), entry.srcInstanceIp.String())
 
 	elem := cache.cache[entry.srcport]
 	if elem.conversionList == nil || len(elem.conversionList) == 0 {
