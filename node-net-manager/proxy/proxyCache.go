@@ -116,6 +116,10 @@ func (cache *ProxyCache) Add(entry ConversionEntry) {
 	cache.cache[entry.srcport] = elem
 
 	cache.addToConversionList(entry)
+	// Also add to the dstport bucket so reverse lookups that index by dstport succeed
+	if entry.dstport > 0 && entry.dstport < len(cache.cache) {
+		cache.addToConversionListAtPort(entry.dstport, entry)
+	}
 }
 
 func (cache *ProxyCache) addToConversionList(entry ConversionEntry) {
@@ -140,6 +144,37 @@ func (cache *ProxyCache) addToConversionList(entry ConversionEntry) {
 		elem.conversionList[elem.nextEntry] = entry
 		elem.nextEntry = (elem.nextEntry + 1) % cache.conversionListMaxSize
 	}
+}
+
+// addToConversionListAtPort inserts the conversion entry into the bucket for a specific port.
+// Caller must hold the rwlock.
+func (cache *ProxyCache) addToConversionListAtPort(port int, entry ConversionEntry) {
+	if port < 0 || port >= len(cache.cache) {
+		return
+	}
+	elem := cache.cache[port]
+	elem.lastUsed = time.Now().Unix()
+	alreadyExist := false
+	alreadyExistPosition := 0
+	// check if dstport already present
+	if elem.conversionList == nil || len(elem.conversionList) == 0 {
+		elem.nextEntry = 0
+		elem.conversionList = make([]ConversionEntry, cache.conversionListMaxSize)
+	}
+	for i, elementry := range elem.conversionList {
+		if elementry.dstport == entry.dstport {
+			alreadyExistPosition = i
+			alreadyExist = true
+			break
+		}
+	}
+	if alreadyExist {
+		elem.conversionList[alreadyExistPosition] = entry
+	} else {
+		elem.conversionList[elem.nextEntry] = entry
+		elem.nextEntry = (elem.nextEntry + 1) % cache.conversionListMaxSize
+	}
+	cache.cache[port] = elem
 }
 
 // KnownServiceIPs returns a de-duplicated list of destination Service IPs seen in the cache
