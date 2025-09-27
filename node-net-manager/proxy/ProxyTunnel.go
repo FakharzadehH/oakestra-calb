@@ -164,18 +164,32 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 
 func (proxy *GoProxyTunnel) getSourceClusterId(srcIP net.IP) string {
 	// Look up the source IP in the table to find which cluster it belongs to
+	// Prefer explicit cluster id on the table entry; if absent, try load metrics' cluster id
 	entry, exists := proxy.environment.GetTableEntryByNsIP(srcIP)
 	if exists {
-		return entry.ClusterId
+		if entry.ClusterId != "" {
+			return entry.ClusterId
+		}
+		if entry.LoadMetrics.ClusterId != "" {
+			logger.DebugLogger().Printf("Using LoadMetrics.ClusterId for src %s: %s", srcIP.String(), entry.LoadMetrics.ClusterId)
+			return entry.LoadMetrics.ClusterId
+		}
 	}
 
-	// If not found, try to get from instance IP
+	// If not found in NS-IP, try instance IP lookup (covers replies from instances)
 	entry, exists = proxy.environment.GetTableEntryByInstanceIP(srcIP)
 	if exists {
-		return entry.ClusterId
+		if entry.ClusterId != "" {
+			return entry.ClusterId
+		}
+		if entry.LoadMetrics.ClusterId != "" {
+			logger.DebugLogger().Printf("Using LoadMetrics.ClusterId for instance src %s: %s", srcIP.String(), entry.LoadMetrics.ClusterId)
+			return entry.LoadMetrics.ClusterId
+		}
 	}
 
-	// Default to local cluster if not found
+	// Fallback: use proxy's configured local cluster id and log the fallback
+	logger.DebugLogger().Printf("No cluster id found for src %s, falling back to localClusterId=%s", srcIP.String(), proxy.localClusterId)
 	return proxy.localClusterId
 }
 
@@ -574,6 +588,7 @@ func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceC
 	// If cluster information is missing across the board, bail out to preserve existing behavior
 	knownClusterInfo := false
 	for _, e := range serviceEntries {
+		logger.DebugLogger().Printf("service instance: %v, cluster_id: %s", e, e.LoadMetrics.ClusterId)
 		if e.LoadMetrics.ClusterId != "" {
 			knownClusterInfo = true
 			break
