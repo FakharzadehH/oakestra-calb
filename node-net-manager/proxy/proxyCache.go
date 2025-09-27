@@ -72,7 +72,20 @@ func (cache *ProxyCache) RetrieveByInstanceIp(srcip net.IP, srcport int, dstport
 			}
 		}
 	}
-	logger.DebugLogger().Printf("ProxyCache miss: lookup srcip=%s srcport=%d dstport=%d", srcip.String(), srcport, dstport)
+	// Try a global scan as a defensive fallback in case entry was added to a different port bucket
+	logger.DebugLogger().Printf("ProxyCache bucket miss: lookup srcip=%s srcport=%d dstport=%d - scanning global cache", srcip.String(), srcport, dstport)
+	for i, bucket := range cache.cache {
+		if bucket.conversionList == nil {
+			continue
+		}
+		for _, e := range bucket.conversionList {
+			if e.dstport == dstport && e.srcip.Equal(srcip) {
+				logger.DebugLogger().Printf("ProxyCache global-scan hit: found in bucket=%d srcip=%s srcport=%d dstport=%d -> dstip=%s dstServiceIp=%s srcInstanceIp=%s", i, e.srcip.String(), e.srcport, e.dstport, e.dstip.String(), e.dstServiceIp.String(), e.srcInstanceIp.String())
+				return e, true
+			}
+		}
+	}
+	logger.DebugLogger().Printf("ProxyCache miss after global scan: lookup srcip=%s srcport=%d dstport=%d", srcip.String(), srcport, dstport)
 	return ConversionEntry{}, false
 }
 
