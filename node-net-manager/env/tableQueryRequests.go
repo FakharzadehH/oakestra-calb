@@ -71,12 +71,23 @@ func responseParser(responseStruct mqttifce.TableQueryResponse) ([]TableEntryCac
 			ServiceIP:        sipList,
 		}
 
+		// propagate cluster id if present at top-level of the instance (tablequery writer may include it)
+		if instance.ClusterId != "" {
+			entry.ClusterId = instance.ClusterId
+		}
+
 		// Propagate optional load metrics if available
 		entry.LoadMetrics = TableEntryCache.LoadMetrics{
 			CpuUsage:          instance.LoadMetrics.CpuUsage,
 			MemoryUsage:       instance.LoadMetrics.MemoryUsage,
 			ActiveConnections: instance.LoadMetrics.ActiveConnections,
 			Timestamp:         instance.LoadMetrics.Timestamp,
+		}
+
+		// propagate cluster id inside load_metrics as well, if present
+		if instance.LoadMetrics.ClusterId != "" {
+			entry.LoadMetrics.ClusterId = instance.LoadMetrics.ClusterId
+			entry.ClusterId = instance.LoadMetrics.ClusterId // also propagate to top-level for backward compatibility
 		}
 
 		result = append(result, entry)

@@ -50,6 +50,7 @@ type ServiceInstance struct {
 	NamespaceIpv6  string `json:"namespace_ip_v6"`
 	HostIp         string `json:"host_ip"`
 	HostPort       int    `json:"host_port"`
+	ClusterId      string `json:"cluster_id,omitempty"`
 	ServiceIp      []Sip  `json:"service_ip"`
 	LoadMetrics    struct {
 		CpuUsage          float64 `json:"cpu_usage,omitempty"`
