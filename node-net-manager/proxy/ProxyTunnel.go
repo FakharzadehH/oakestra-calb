@@ -64,7 +64,11 @@ type GoProxyTunnel struct {
 	cpuWeight           float64
 	memoryWeight        float64
 	connWeight          float64
-	metricsTTL          time.Duration
+    metricsTTL          time.Duration
+    // reverse-route cache: maps client namespace IP -> origin node IP
+    reverseRoutes      map[string]reverseRouteEntry
+    reverseMu          sync.RWMutex
+    reverseTTL         time.Duration
 }
 
 // incoming message from UDP channel
@@ -75,27 +79,40 @@ type incomingMessage struct {
 
 // outgoing message from bridge
 type outgoingMessage struct {
-	content *[]byte
+    content *[]byte
+}
+
+// reverseRouteEntry keeps where to send replies for a given client namespace IP
+type reverseRouteEntry struct {
+    nodeIP   net.IP
+    lastSeen time.Time
 }
 
 // handler function for all outgoing messages that are received by the TUN device
 func (proxy *GoProxyTunnel) outgoingMessage() {
-	for msg := range proxy.outgoingChannel {
-		ip, prot := decodePacket(*msg.content)
-		if ip == nil {
-			continue
-		}
-		logger.DebugLogger().Printf("Outgoing packet:\t\t\t%s ---> %s\n", ip.GetSrcIP().String(), ip.GetDestIP().String())
+    for msg := range proxy.outgoingChannel {
+        ip, prot := decodePacket(*msg.content)
+        if ip == nil {
+            continue
+        }
+        logger.DebugLogger().Printf("Outgoing packet:\t\t\t%s ---> %s\n", ip.GetSrcIP().String(), ip.GetDestIP().String())
 
 		if prot == nil { // only TCP/UDP supported
 			logger.DebugLogger().Println("Neither TCP, nor UDP packet received. Dropping it.")
 			continue
 		}
-		newPacket := proxy.outgoingProxy(ip, prot)
-		if newPacket == nil {
-			logger.ErrorLogger().Println("Unable to convert the packet")
-			continue
-		}
+        newPacket := proxy.outgoingProxy(ip, prot)
+        if newPacket == nil {
+            // As a safety net, try forwarding the original packet using reverse-route lookup
+            // This covers replies towards foreign namespace IPs (non-ServiceIP) in cross-node flows
+            if host, port := proxy.getReverseForwardTarget(ip.GetDestIP()); port > 0 {
+                logger.DebugLogger().Printf("Reverse-route fallback: forwarding unchanged packet to %s:%d", host.String(), port)
+                proxy.forward(host, port, ip.SerializePacket(ip.GetDestIP(), ip.GetSrcIP(), prot), 0)
+                continue
+            }
+            logger.ErrorLogger().Println("Unable to convert the packet")
+            continue
+        }
 		// Determine the actual destination from the new packet (outgoingProxy may have rewritten dst)
 		newPacketBytes := packetToByte(newPacket)
 		rewrittenNet, _ := decodePacket(newPacketBytes)
@@ -103,24 +120,28 @@ func (proxy *GoProxyTunnel) outgoingMessage() {
 			logger.ErrorLogger().Println("Unable to decode rewritten packet to determine destination")
 			continue
 		}
-		dstHost, dstPort := proxy.locateRemoteAddress(rewrittenNet.GetDestIP())
-		proxy.forward(dstHost, dstPort, newPacket, 0)
-	}
+        dstHost, dstPort := proxy.locateRemoteAddress(rewrittenNet.GetDestIP())
+        proxy.forward(dstHost, dstPort, newPacket, 0)
+    }
 }
 
 // handler function for all ingoing messages that are received by the UDP socket
 func (proxy *GoProxyTunnel) ingoingMessage() {
-	for msg := range proxy.incomingChannel {
-		ip, prot := decodePacket(*msg.content)
-		if ip == nil {
-			continue
-		}
-		logger.DebugLogger().Printf("Ingoing packet:\t\t\t %s <--- %s\n", ip.GetDestIP().String(), ip.GetSrcIP().String())
-		if prot == nil { // only TCP/UDP handled
-			continue
-		}
-		newPacket := proxy.ingoingProxy(ip, prot)
-		var packetBytes []byte
+    for msg := range proxy.incomingChannel {
+        ip, prot := decodePacket(*msg.content)
+        if ip == nil {
+            continue
+        }
+        logger.DebugLogger().Printf("Ingoing packet:\t\t\t %s <--- %s\n", ip.GetDestIP().String(), ip.GetSrcIP().String())
+        // If this packet arrived via UDP from a remote node, remember how to return to the origin
+        if msg.from.Port != 0 && !msg.from.IP.Equal(proxy.localIP) {
+            proxy.recordReverseRoute(ip.GetSrcIP(), msg.from.IP)
+        }
+        if prot == nil { // only TCP/UDP handled
+            continue
+        }
+        newPacket := proxy.ingoingProxy(ip, prot)
+        var packetBytes []byte
 		if newPacket == nil {
 			packetBytes = *msg.content
 		} else {
@@ -135,13 +156,13 @@ func (proxy *GoProxyTunnel) ingoingMessage() {
 // If packet destination is in the range of proxy.ProxyIpSubnetwork
 // then find enable load balancing policy and find out the actual dstIP address
 func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot iputils.TransportLayerProtocol) gopacket.Packet {
-	// apply cluster-aware only when enabled
-	if proxy.clusterAwareEnabled {
-		// Check if destination is a ServiceIP and of type ClusterAware
-		entries := proxy.environment.GetTableEntryByServiceIP(ip.GetDestIP())
-		if len(entries) > 0 {
-			isClusterAware := false
-			for _, e := range entries {
+    // apply cluster-aware only when enabled and the destination belongs to the ServiceIP subnetwork
+    if proxy.clusterAwareEnabled && proxy.isServiceIPSubnet(ip.GetDestIP(), ip.GetProtocolVersion()) {
+        // Check if destination is a ServiceIP and of type ClusterAware
+        entries := proxy.environment.GetTableEntryByServiceIP(ip.GetDestIP())
+        if len(entries) > 0 {
+            isClusterAware := false
+            for _, e := range entries {
 				for _, sip := range e.ServiceIP {
 					if (sip.Address.Equal(ip.GetDestIP()) || sip.Address_v6.Equal(ip.GetDestIP())) && sip.IpType == TableEntryCache.ClusterAware {
 						isClusterAware = true
@@ -185,10 +206,10 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 			}
 		}
 	}
-	logger.InfoLogger().Println("Non cluster-aware routing or no cluster info available, using existing logic")
+    logger.InfoLogger().Println("Non cluster-aware routing or no cluster info available, using existing logic")
 
-	// Fall back to existing logic for non-service calls
-	return proxy.outgoingProxyOriginal(ip, prot)
+    // Fall back to existing logic for non-service calls
+    return proxy.outgoingProxyOriginal(ip, prot)
 }
 
 func (proxy *GoProxyTunnel) getSourceClusterId(srcIP net.IP) string {
@@ -228,11 +249,11 @@ func (proxy *GoProxyTunnel) createClusterAwarePacket(ip iputils.NetworkLayerPack
 }
 
 func (proxy *GoProxyTunnel) outgoingProxyOriginal(ip iputils.NetworkLayerPacket, prot iputils.TransportLayerProtocol) gopacket.Packet {
-	dstIP := ip.GetDestIP()
-	srcIP := ip.GetSrcIP()
-	var semanticRoutingSubnetwork bool
-	srcport := -1
-	dstport := -1
+    dstIP := ip.GetDestIP()
+    srcIP := ip.GetSrcIP()
+    var semanticRoutingSubnetwork bool
+    srcport := -1
+    dstport := -1
 	if prot != nil {
 		srcport = int(prot.GetSourcePort())
 		dstport = int(prot.GetDestPort())
@@ -248,12 +269,12 @@ func (proxy *GoProxyTunnel) outgoingProxyOriginal(ip iputils.NetworkLayerPacket,
 			Equal(ip.GetDestIP().Mask(proxy.ProxyIPv6Subnetwork.Mask))
 	}
 
-	if semanticRoutingSubnetwork {
-		// Check if the ServiceIP is known
-		tableEntryList := proxy.environment.GetTableEntryByServiceIP(dstIP)
-		if len(tableEntryList) < 1 {
-			return nil
-		}
+    if semanticRoutingSubnetwork {
+        // Check if the ServiceIP is known
+        tableEntryList := proxy.environment.GetTableEntryByServiceIP(dstIP)
+        if len(tableEntryList) < 1 {
+            return nil
+        }
 
 		// Find the instanceIP of the current service
 		instanceIP, err := proxy.convertToInstanceIp(ip)
@@ -284,10 +305,16 @@ func (proxy *GoProxyTunnel) outgoingProxyOriginal(ip iputils.NetworkLayerPacket,
 				dstport:       dstport,
 			}
 			proxy.proxycache.Add(entry)
-		}
-		return ip.SerializePacket(entry.dstip, entry.srcInstanceIp, prot)
-	}
-	return nil
+        }
+        return ip.SerializePacket(entry.dstip, entry.srcInstanceIp, prot)
+    }
+    // Not a ServiceIP destination: attempt reverse-route forwarding (reply path of cross-node flow)
+    if host, port := proxy.getReverseForwardTarget(dstIP); port > 0 {
+        logger.DebugLogger().Printf("Reverse-route: will forward reply towards %s via %s:%d", dstIP.String(), host.String(), port)
+        // keep src/dst unchanged; forwarding will use locateRemoteAddress on rewritten packet
+        return ip.SerializePacket(dstIP, srcIP, prot)
+    }
+    return nil
 }
 
 func (proxy *GoProxyTunnel) convertToInstanceIp(ip iputils.NetworkLayerPacket) (net.IP, error) {
@@ -410,15 +437,21 @@ func (proxy *GoProxyTunnel) tunIngoingListen() {
 
 // Given a network namespace IP find the machine IP and port for the tunneling
 func (proxy *GoProxyTunnel) locateRemoteAddress(nsIP net.IP) (net.IP, int) {
-	// if no local cache entry convert namespace IP to host IP via table query
-	tableElement, found := proxy.environment.GetTableEntryByNsIP(nsIP)
-	if found {
-		logger.DebugLogger().Println("Remote NS IP", nsIP.String(), " translated to ", tableElement.Nodeip.String())
-		return tableElement.Nodeip, tableElement.Nodeport
-	}
+    // if no local cache entry convert namespace IP to host IP via table query
+    tableElement, found := proxy.environment.GetTableEntryByNsIP(nsIP)
+    if found {
+        logger.DebugLogger().Println("Remote NS IP", nsIP.String(), " translated to ", tableElement.Nodeip.String())
+        return tableElement.Nodeip, tableElement.Nodeport
+    }
 
-	// If nothing found, just drop the packet using an invalid port
-	return nsIP, -1
+    // Fallback to reverse-route cache: reply destined to a foreign namespace IP
+    if host, port := proxy.getReverseForwardTarget(nsIP); port > 0 {
+        logger.DebugLogger().Printf("Reverse-route locate: %s -> %s:%d", nsIP.String(), host.String(), port)
+        return host, port
+    }
+
+    // If nothing found, just drop the packet using an invalid port
+    return nsIP, -1
 }
 
 // forward message to final destination via UDP tunneling
@@ -837,11 +870,60 @@ func (proxy *GoProxyTunnel) SetWeights(cpu, mem, conn float64) {
 	proxy.cpuWeight, proxy.memoryWeight, proxy.connWeight = cpu, mem, conn
 }
 func (proxy *GoProxyTunnel) SetMetricsTTL(seconds int) {
-	if seconds <= 0 {
-		proxy.metricsTTL = 0
-		return
-	}
-	proxy.metricsTTL = time.Duration(seconds) * time.Second
+    if seconds <= 0 {
+        proxy.metricsTTL = 0
+        return
+    }
+    proxy.metricsTTL = time.Duration(seconds) * time.Second
+}
+
+// isServiceIPSubnet returns true if ip is within the configured ServiceIP subnetwork (v4 or v6)
+func (proxy *GoProxyTunnel) isServiceIPSubnet(ip net.IP, version int) bool {
+    if version == 4 {
+        return proxy.ProxyIpSubnetwork.IP.Mask(proxy.ProxyIpSubnetwork.Mask).Equal(ip.Mask(proxy.ProxyIpSubnetwork.Mask))
+    }
+    if version == 6 {
+        return proxy.ProxyIPv6Subnetwork.IP.Mask(proxy.ProxyIPv6Subnetwork.Mask).Equal(ip.Mask(proxy.ProxyIPv6Subnetwork.Mask))
+    }
+    return false
+}
+
+// recordReverseRoute remembers that replies for clientNsIP must be sent to originNode
+func (proxy *GoProxyTunnel) recordReverseRoute(clientNsIP net.IP, originNode net.IP) {
+    if clientNsIP == nil || originNode == nil {
+        return
+    }
+    key := clientNsIP.String()
+    proxy.reverseMu.Lock()
+    proxy.reverseRoutes[key] = reverseRouteEntry{nodeIP: originNode, lastSeen: time.Now()}
+    proxy.reverseMu.Unlock()
+    logger.DebugLogger().Printf("Reverse-route recorded: %s -> %s", key, originNode.String())
+}
+
+// getReverseForwardTarget returns the node and port to reach a foreign namespace IP, if known
+func (proxy *GoProxyTunnel) getReverseForwardTarget(nsIP net.IP) (net.IP, int) {
+    if nsIP == nil {
+        return net.IP{}, -1
+    }
+    key := nsIP.String()
+    proxy.reverseMu.RLock()
+    entry, ok := proxy.reverseRoutes[key]
+    proxy.reverseMu.RUnlock()
+    if !ok {
+        return net.IP{}, -1
+    }
+    ttl := proxy.reverseTTL
+    if ttl <= 0 {
+        ttl = 60 * time.Second
+    }
+    if time.Since(entry.lastSeen) > ttl {
+        // expire stale entry
+        proxy.reverseMu.Lock()
+        delete(proxy.reverseRoutes, key)
+        proxy.reverseMu.Unlock()
+        return net.IP{}, -1
+    }
+    return entry.nodeIP, proxy.TunnelPort
 }
 
 func (proxy *GoProxyTunnel) StartLoadMonitoring(intervalSeconds int) {

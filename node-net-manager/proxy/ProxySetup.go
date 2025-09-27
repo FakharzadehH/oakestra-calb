@@ -1,20 +1,21 @@
 package proxy
 
 import (
-	"NetManager/env"
-	"NetManager/logger"
-	"NetManager/network"
-	"encoding/json"
-	"fmt"
-	"log"
-	"math/rand"
-	"net"
-	"os"
-	"os/exec"
-	"strconv"
-	"sync"
+    "NetManager/env"
+    "NetManager/logger"
+    "NetManager/network"
+    "encoding/json"
+    "fmt"
+    "log"
+    "math/rand"
+    "net"
+    "os"
+    "os/exec"
+    "strconv"
+    "sync"
+    "time"
 
-	"github.com/songgao/water"
+    "github.com/songgao/water"
 )
 
 // create a  new GoProxyTunnel with the configuration from the custom local file
@@ -49,20 +50,22 @@ func New() GoProxyTunnel {
 
 // create a  new GoProxyTunnel with a custom configuration
 func NewCustom(configuration Configuration) GoProxyTunnel {
-	proxy := GoProxyTunnel{
-		isListening:      false,
-		errorChannel:     make(chan error),
-		finishChannel:    make(chan bool),
-		stopChannel:      make(chan bool),
-		connectionBuffer: make(map[string]*net.UDPConn),
-		proxycache:       NewProxyCache(),
-		udpwrite:         sync.RWMutex{},
-		tunwrite:         sync.RWMutex{},
-		incomingChannel:  make(chan incomingMessage, 1000),
-		outgoingChannel:  make(chan outgoingMessage, 1000),
-		mtusize:          strconv.Itoa(configuration.Mtusize),
-		randseed:         rand.New(rand.NewSource(42)),
-	}
+    proxy := GoProxyTunnel{
+        isListening:      false,
+        errorChannel:     make(chan error),
+        finishChannel:    make(chan bool),
+        stopChannel:      make(chan bool),
+        connectionBuffer: make(map[string]*net.UDPConn),
+        proxycache:       NewProxyCache(),
+        udpwrite:         sync.RWMutex{},
+        tunwrite:         sync.RWMutex{},
+        incomingChannel:  make(chan incomingMessage, 1000),
+        outgoingChannel:  make(chan outgoingMessage, 1000),
+        mtusize:          strconv.Itoa(configuration.Mtusize),
+        randseed:         rand.New(rand.NewSource(42)),
+        reverseRoutes:    make(map[string]reverseRouteEntry),
+        reverseTTL:       60 * time.Second,
+    }
 
 	// parse configuration file
 	tunconfig := configuration
