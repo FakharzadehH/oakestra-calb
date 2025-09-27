@@ -325,8 +325,20 @@ func (proxy *GoProxyTunnel) ingoingProxy(ip iputils.NetworkLayerPacket, prot ipu
 	entry, exist := proxy.proxycache.RetrieveByInstanceIp(ip.GetDestIP(), dstport, srcport)
 
 	if !exist {
+		// primary lookup missed — attempt defensive alternate ordering in case
+		// the entry was inserted with swapped src/dst port ordering
+		logger.DebugLogger().Printf("ProxyCache primary miss; trying alternate lookup: dest=%s dstport=%d srcport=%d", ip.GetDestIP().String(), dstport, srcport)
+		altEntry, altExist := proxy.proxycache.RetrieveByInstanceIp(ip.GetDestIP(), srcport, dstport)
+		if altExist {
+			logger.DebugLogger().Printf("ProxyCache alternate hit: using alternate mapping (swapped ports)")
+			entry = altEntry
+			exist = true
+		}
+	}
+
+	if !exist {
 		// No proxy proxycache entry, log detailed info for debugging
-		logger.DebugLogger().Printf("No proxycache entry for incoming packet: dest=%s dstport=%d srcport=%d", ip.GetDestIP().String(), dstport, srcport)
+		logger.DebugLogger().Printf("No proxycache entry for incoming packet after fallback attempts: dest=%s dstport=%d srcport=%d", ip.GetDestIP().String(), dstport, srcport)
 		return nil
 	}
 
