@@ -6,6 +6,7 @@ import (
 	"NetManager/logger"
 	"NetManager/proxy/iputils"
 	"fmt"
+	"math"
 	"math/rand"
 	"net"
 	"sync"
@@ -144,18 +145,18 @@ func (proxy *GoProxyTunnel) outgoingProxy(ip iputils.NetworkLayerPacket, prot ip
 			if isClusterAware {
 				sourceClusterId := proxy.getSourceClusterId(ip.GetSrcIP())
 				preferIPv6 := ip.GetProtocolVersion() == 6
-				logger.DebugLogger().Printf("Cluster-aware routing requested: src=%s dstServiceIP=%s srcCluster=%s preferIPv6=%v", ip.GetSrcIP().String(), ip.GetDestIP().String(), sourceClusterId, preferIPv6)
+				logger.InfoLogger().Printf("Cluster-aware routing requested: src=%s dstServiceIP=%s srcCluster=%s preferIPv6=%v", ip.GetSrcIP().String(), ip.GetDestIP().String(), sourceClusterId, preferIPv6)
 				clusterAwareDest, err := proxy.getClusterAwareDestination(ip.GetDestIP(), sourceClusterId, preferIPv6)
 				if err == nil {
-					logger.DebugLogger().Printf("Cluster-aware selection chosen dest=%s", clusterAwareDest.String())
+					logger.InfoLogger().Printf("Cluster-aware selection chosen dest=%s", clusterAwareDest.String())
 					return proxy.createClusterAwarePacket(ip, prot, clusterAwareDest)
 				} else {
-					logger.DebugLogger().Printf("Cluster-aware selection fallback: %v", err)
+					logger.ErrorLogger().Printf("Cluster-aware selection fallback: %v", err)
 				}
 			}
 		}
 	}
-	logger.DebugLogger().Println("Non cluster-aware routing or no cluster info available, using existing logic")
+	logger.InfoLogger().Println("Non cluster-aware routing or no cluster info available, using existing logic")
 
 	// Fall back to existing logic for non-service calls
 	return proxy.outgoingProxyOriginal(ip, prot)
@@ -573,7 +574,7 @@ func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceC
 	// If cluster information is missing across the board, bail out to preserve existing behavior
 	knownClusterInfo := false
 	for _, e := range serviceEntries {
-		if e.ClusterId != "" {
+		if e.LoadMetrics.ClusterId != "" {
 			knownClusterInfo = true
 			break
 		}
@@ -587,7 +588,7 @@ func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceC
 	remoteInstances := make([]TableEntryCache.TableEntry, 0)
 
 	for _, entry := range serviceEntries {
-		if entry.ClusterId == sourceClusterId {
+		if entry.LoadMetrics.ClusterId == sourceClusterId {
 			localInstances = append(localInstances, entry)
 		} else {
 			remoteInstances = append(remoteInstances, entry)
@@ -622,8 +623,10 @@ func (proxy *GoProxyTunnel) getClusterAwareDestination(serviceIP net.IP, sourceC
 }
 
 func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.TableEntry) *TableEntryCache.TableEntry {
-	var bestInstance *TableEntryCache.TableEntry
-	bestScore := float64(0)
+	// Collect top-scoring candidates (allow ties) and break ties by freshest metrics or randomly
+	var candidates []*TableEntryCache.TableEntry
+	bestScore := math.Inf(-1)
+	eps := 1e-9
 
 	for i := range instances {
 		instance := &instances[i]
@@ -656,14 +659,55 @@ func (proxy *GoProxyTunnel) selectBestLocalInstance(instances []TableEntryCache.
 		score := proxy.calculateInstanceScore(instance)
 		logger.DebugLogger().Printf("Instance %d score=%.4f (cpu=%.3f mem=%.3f conns=%d)", instance.Instancenumber, score, instance.LoadMetrics.CpuUsage, instance.LoadMetrics.MemoryUsage, instance.LoadMetrics.ActiveConnections)
 
-		// Prefer instances with higher score (lower load -> higher score)
-		if bestInstance == nil || score > bestScore {
-			bestInstance = instance
+		if score < 0 { // penalized / invalid
+			continue
+		}
+
+		if score > bestScore+eps {
+			// new best
+			candidates = candidates[:0]
+			candidates = append(candidates, instance)
 			bestScore = score
+		} else if math.Abs(score-bestScore) <= eps {
+			// tie
+			candidates = append(candidates, instance)
 		}
 	}
 
-	return bestInstance
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+
+	// If multiple top candidates, prefer the one with freshest metrics
+	freshestTS := int64(0)
+	for _, c := range candidates {
+		if c.LoadMetrics.Timestamp > freshestTS {
+			freshestTS = c.LoadMetrics.Timestamp
+		}
+	}
+
+	freshCandidates := make([]*TableEntryCache.TableEntry, 0)
+	if freshestTS > 0 {
+		for _, c := range candidates {
+			if c.LoadMetrics.Timestamp == freshestTS {
+				freshCandidates = append(freshCandidates, c)
+			}
+		}
+	}
+
+	if len(freshCandidates) == 0 {
+		// No metrics at all — pick randomly among candidates
+		idx := proxy.randseed.Intn(len(candidates))
+		return candidates[idx]
+	}
+
+	// If multiple freshest, pick randomly among freshest
+	idx := proxy.randseed.Intn(len(freshCandidates))
+	return freshCandidates[idx]
 }
 
 func (proxy *GoProxyTunnel) selectBestRemoteInstance(instances []TableEntryCache.TableEntry) *TableEntryCache.TableEntry {

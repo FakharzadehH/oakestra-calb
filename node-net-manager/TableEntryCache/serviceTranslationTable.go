@@ -47,6 +47,7 @@ type LoadMetrics struct {
 	MemoryUsage       float64 `json:"memory_usage"`
 	ActiveConnections int     `json:"active_connections"`
 	Timestamp         int64   `json:"timestamp"` // unix millis when metrics sampled
+	ClusterId         string  `json:"cluster_id,omitempty"`
 }
 
 type TableManager struct {
