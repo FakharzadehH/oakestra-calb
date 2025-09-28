@@ -237,14 +237,29 @@ def mongo_remove_interest(job_name, clientid):
 
 def mongo_update_instance_load_metrics(job_name, instance_number, load_metrics):
     """Update load metrics for a specific instance"""
+    # Also persist cluster_id (if present in load_metrics) to keep instance_list[].cluster_id consistent
+    set_fields = {
+        "instance_list.$.load_metrics": load_metrics
+    }
+    try:
+        metric_cluster_id = None
+        if load_metrics is not None:
+            if isinstance(load_metrics, dict):
+                metric_cluster_id = load_metrics.get('cluster_id') or load_metrics.get('clusterId')
+            else:
+                metric_cluster_id = getattr(load_metrics, 'cluster_id', None) or getattr(load_metrics, 'clusterId', None)
+        if metric_cluster_id:
+            set_fields["instance_list.$.cluster_id"] = metric_cluster_id
+    except Exception:
+        #  if anything goes wrong while extracting cluster_id, ignore and continue updating metrics only
+        pass
+
     mongo_jobs.db.jobs.update_one(
         {
             'job_name': job_name,
             "instance_list.instance_number": instance_number
         },
         {
-            '$set': {
-                "instance_list.$.load_metrics": load_metrics  # expected keys: cpu_usage, memory_usage, active_connections, timestamp
-            }
+            '$set': set_fields
         }
     )
